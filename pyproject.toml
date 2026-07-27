@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "training-cfgs"
+version = "0.1.0"
+description = "Standalone training configuration manager."
+authors = [
+    { name = "Vaishnavahari Seenivasan" }
+]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+config = [
+    "pyyaml>=6.0",
+]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["training_cfgs*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
