@@ -150,6 +150,58 @@ See [`examples/optuna_example.py`](../examples/optuna_example.py) for a
 complete runnable version (with a `set_distribution`-based config, a stand-in
 `train` function, and printed output at each step).
 
+## Persisting and resuming a study
+
+`optuna.create_study` keeps everything in memory by default, so the study
+(and every trial in it) is lost when the process exits. Pass a `storage` URL
+to persist it — SQLite is the simplest option, but any
+[SQLAlchemy-compatible URL](https://optuna.readthedocs.io/en/stable/reference/generated/optuna.storages.RDBStorage.html)
+(Postgres, MySQL, ...) works, including for multiple processes/machines
+optimizing the same study concurrently:
+
+```python
+study = optuna.create_study(
+    study_name="my_study",
+    storage="sqlite:///example.db",
+    direction="minimize",
+    load_if_exists=True,
+)
+cfg.single_objective_optimization(study, train, n_trials=50)
+```
+
+`study_name` + `load_if_exists=True` make this safe to call repeatedly:
+first call creates the study, every later call (a resumed run, a restart
+after a crash, another worker) attaches to the existing one instead of
+erroring or starting over. To resume later without re-running
+`create_study`, `optuna.load_study(study_name=..., storage=...)` loads it
+directly; either way, `study.optimize(...)` continues adding trials on top
+of the stored history — `study.trials` includes every prior run.
+
+## Visualizing a study
+
+Given a `storage` URL, a study's trial history can be inspected without any
+`training_cfgs`-specific code:
+
+- **[`optuna-dashboard`](https://github.com/optuna/optuna-dashboard)**
+  (`pip install optuna-dashboard`) — an interactive web UI over the same
+  storage URL, including a study that's still running:
+
+  ```bash
+  optuna-dashboard sqlite:///example.db
+  ```
+
+- **`optuna.visualization`** — in-code plots (Plotly by default, or
+  `optuna.visualization.matplotlib` for static figures) for a notebook or
+  report:
+
+  ```python
+  from optuna.visualization import plot_optimization_history, plot_param_importances
+
+  study = optuna.load_study(study_name="my_study", storage="sqlite:///example.db")
+  plot_optimization_history(study).show()
+  plot_param_importances(study).show()
+  ```
+
 ## Validation and edge cases
 
 - A field with no `distribution` attached is simply skipped by
