@@ -26,32 +26,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
-from optuna.distributions import BaseDistribution, CategoricalDistribution
+from optuna.distributions import CategoricalDistribution
 
 from .field import FieldSpec
 
 if TYPE_CHECKING:
     from .config import Config
-
-
-def _distribution_or_raise(spec: FieldSpec) -> BaseDistribution:
-    if spec.distribution is None:
-        raise ValueError(
-            f"Field '{spec.name}' has no optuna distribution attached; call "
-            f"Config.set_distribution(...) or declare one in the config file first"
-        )
-    return spec.distribution
-
-
-def suggest_field(trial: Any, key: str, spec: FieldSpec) -> Any:
-    """Ask an `optuna.Trial` to suggest a value for one sweepable field.
-
-    `Trial._suggest` is Optuna's own generic entry point for an arbitrary
-    `BaseDistribution` — it's what `suggest_float`/`suggest_int`/
-    `suggest_categorical` call internally, and the only way to suggest from
-    a distribution object without re-deriving low/high/choices by hand.
-    """
-    return trial._suggest(key, _distribution_or_raise(spec))
 
 
 def to_sweep_params(spec: FieldSpec, current_value: Any) -> dict:
@@ -106,7 +86,11 @@ def suggest(config: "Config", trial: Any, groups: Optional[list[str]] = None) ->
         for field, spec in fields.items():
             if spec.is_sweepable():
                 key = f"{group}.{field}"
-                cfg._set_field_strict(group, field, suggest_field(trial, key, spec))
+                # `Trial._suggest` is Optuna's own generic entry point for an arbitrary
+                # `BaseDistribution` — what `suggest_float`/`suggest_int`/`suggest_categorical`
+                # call internally, and the only way to suggest from a distribution object
+                # without re-deriving low/high/choices by hand.
+                cfg._set_field_strict(group, field, trial._suggest(key, spec.distribution))
     return cfg
 
 
