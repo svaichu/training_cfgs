@@ -14,6 +14,8 @@ import argparse
 import json
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
+from optuna.distributions import CategoricalDistribution
+
 if TYPE_CHECKING:
     from .config import Config
     from .field import FieldSpec
@@ -116,9 +118,9 @@ def add_config_arguments(
 
     Options default to `argparse.SUPPRESS`, so only flags the user actually
     passed show up in the parsed namespace — everything else keeps its
-    current config value. Fields with `values` become `choices`; `bool`
-    fields accept both a bare flag (`--training.shuffle`) and an explicit
-    value (`--training.shuffle=false`).
+    current config value. Fields with a `CategoricalDistribution` become
+    `choices`; `bool` fields accept both a bare flag (`--training.shuffle`)
+    and an explicit value (`--training.shuffle=false`).
     """
     for group in cfg.groups():
         if groups is not None and group not in groups:
@@ -137,8 +139,8 @@ def add_config_arguments(
             if spec.type == "bool":
                 kwargs["nargs"] = "?"
                 kwargs["const"] = True
-            if spec.values is not None and spec.type in ("int", "float", "str"):
-                kwargs["choices"] = spec.values
+            if isinstance(spec.distribution, CategoricalDistribution) and spec.type in ("int", "float", "str"):
+                kwargs["choices"] = list(spec.distribution.choices)
             else:
                 kwargs["metavar"] = spec.type.upper()
             arg_group.add_argument(f"--{key}", **kwargs)

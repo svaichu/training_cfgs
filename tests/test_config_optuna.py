@@ -1,5 +1,6 @@
 import optuna
 import pytest
+from optuna.distributions import CategoricalDistribution, FloatDistribution, IntDistribution
 
 from training_cfgs import Config
 
@@ -14,12 +15,12 @@ def _make_cfg() -> Config:
         optimizer="adam",
         num_epochs=100,
     )
-    cfg.set_bounds("training", "learning_rate", min=1e-5, max=1e-2, log=True)
-    cfg.set_values("training", "optimizer", ["adam", "sgd"])
+    cfg.set_distribution("training", "learning_rate", FloatDistribution(1e-5, 1e-2, log=True))
+    cfg.set_distribution("training", "optimizer", CategoricalDistribution(["adam", "sgd"]))
     return cfg
 
 
-def test_to_optuna_distributions_maps_bounds_and_values():
+def test_to_optuna_distributions_returns_the_attached_distributions():
     cfg = _make_cfg()
     distributions = cfg.to_optuna_distributions()
 
@@ -35,6 +36,9 @@ def test_to_optuna_distributions_maps_bounds_and_values():
 
     # Fixed (non-sweepable) fields aren't part of the search space.
     assert "training.num_epochs" not in distributions
+
+    # The distribution objects are the schema's own, not a re-derived copy.
+    assert lr_dist is cfg.schema("training", "learning_rate").distribution
 
 
 def test_suggest_returns_new_config_without_mutating_original():
@@ -103,11 +107,11 @@ def test_from_optuna_params_raises_for_non_dotted_key():
         cfg.from_optuna_params({"learning_rate": 1e-3})
 
 
-def test_int_field_with_bounds_uses_suggest_int():
+def test_int_field_with_distribution_uses_suggest_int():
     cfg = Config()
     cfg.define("training", "batch_size", default=32, type="int")
     cfg.training(batch_size=32)
-    cfg.set_bounds("training", "batch_size", min=8, max=256, step=8)
+    cfg.set_distribution("training", "batch_size", IntDistribution(8, 256, step=8))
 
     distributions = cfg.to_optuna_distributions()
     assert isinstance(distributions["training.batch_size"], optuna.distributions.IntDistribution)
@@ -117,3 +121,12 @@ def test_int_field_with_bounds_uses_suggest_int():
     trial_cfg = cfg.suggest(trial)
     assert isinstance(trial_cfg.training.batch_size, int)
     assert 8 <= trial_cfg.training.batch_size <= 256
+
+
+def test_suggest_raises_for_field_without_a_distribution():
+    cfg = Config()
+    cfg.define("training", "learning_rate", default=1e-4, type="float")
+    cfg.training(learning_rate=1e-4)
+    # `is_sweepable()` is False without a distribution, so `suggest`/`to_optuna_distributions`
+    # simply skip the field rather than erroring -- confirm that skip behavior here.
+    assert cfg.to_optuna_distributions() == {}

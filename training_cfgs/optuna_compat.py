@@ -1,5 +1,10 @@
 """Two-way Optuna compatibility for `Config`.
 
+A field's search space *is* an `optuna.distributions.BaseDistribution` —
+attached via `Config.set_distribution(group, field, distribution)` or
+declared directly in a config file — so there's no separate bounds/values
+schema to translate; `FieldSpec.distribution` is handed to Optuna as-is.
+
 Building a search space and running a study::
 
     distributions = cfg.to_optuna_distributions()   # optuna.distributions, keyed 'group.field'
@@ -21,7 +26,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
-import optuna
+from optuna.distributions import BaseDistribution, CategoricalDistribution
 
 from .field import FieldSpec
 
@@ -29,53 +34,43 @@ if TYPE_CHECKING:
     from .config import Config
 
 
-def _bounds_or_raise(spec: FieldSpec) -> dict:
-    bounds = spec.bounds or {}
-    if "min" not in bounds or "max" not in bounds:
+def _distribution_or_raise(spec: FieldSpec) -> BaseDistribution:
+    if spec.distribution is None:
         raise ValueError(
-            f"Field '{spec.name}' is not a valid Optuna range: bounds must set both "
-            f"'min' and 'max', got {bounds!r}"
+            f"Field '{spec.name}' has no optuna distribution attached; call "
+            f"Config.set_distribution(...) or declare one in the config file first"
         )
-    return bounds
-
-
-def field_to_distribution(spec: FieldSpec):
-    """Convert a sweepable `FieldSpec` into an `optuna.distributions` object.
-
-    `bounds` may carry `log` (bool) and `step` on top of `min`/`max`, matching
-    the extra kwargs `Config.set_bounds` already passes through.
-    """
-    if spec.values is not None:
-        return optuna.distributions.CategoricalDistribution(list(spec.values))
-
-    bounds = _bounds_or_raise(spec)
-    log = bool(bounds.get("log", False))
-    step = bounds.get("step")
-    if spec.type == "int":
-        return optuna.distributions.IntDistribution(
-            int(bounds["min"]), int(bounds["max"]), log=log, step=int(step) if step is not None else 1
-        )
-    return optuna.distributions.FloatDistribution(float(bounds["min"]), float(bounds["max"]), log=log, step=step)
+    return spec.distribution
 
 
 def suggest_field(trial: Any, key: str, spec: FieldSpec) -> Any:
-    """Ask an `optuna.Trial` to suggest a value for one sweepable field."""
-    if spec.values is not None:
-        return trial.suggest_categorical(key, list(spec.values))
+    """Ask an `optuna.Trial` to suggest a value for one sweepable field.
 
-    bounds = _bounds_or_raise(spec)
-    log = bool(bounds.get("log", False))
-    step = bounds.get("step")
-    if spec.type == "int":
-        kwargs: dict = {"log": log}
-        if step is not None:
-            kwargs["step"] = int(step)
-        return trial.suggest_int(key, int(bounds["min"]), int(bounds["max"]), **kwargs)
+    `Trial._suggest` is Optuna's own generic entry point for an arbitrary
+    `BaseDistribution` — it's what `suggest_float`/`suggest_int`/
+    `suggest_categorical` call internally, and the only way to suggest from
+    a distribution object without re-deriving low/high/choices by hand.
+    """
+    return trial._suggest(key, _distribution_or_raise(spec))
 
-    kwargs = {"log": log}
-    if step is not None:
-        kwargs["step"] = step
-    return trial.suggest_float(key, float(bounds["min"]), float(bounds["max"]), **kwargs)
+
+def to_sweep_params(spec: FieldSpec, current_value: Any) -> dict:
+    """Convert one field's schema into a W&B sweep `parameters` entry.
+
+    Non-sweepable fields (no `distribution`) export as a fixed `value` from
+    the current config.
+    """
+    distribution = spec.distribution
+    if distribution is None:
+        return {"value": current_value}
+    if isinstance(distribution, CategoricalDistribution):
+        return {"values": list(distribution.choices)}
+    params: dict = {"min": distribution.low, "max": distribution.high}
+    if distribution.log:
+        params["log"] = True
+    if distribution.step is not None:
+        params["step"] = distribution.step
+    return params
 
 
 def to_optuna_distributions(config: "Config", groups: Optional[list[str]] = None) -> dict:
@@ -90,7 +85,7 @@ def to_optuna_distributions(config: "Config", groups: Optional[list[str]] = None
             continue
         for field, spec in fields.items():
             if spec.is_sweepable():
-                distributions[f"{group}.{field}"] = field_to_distribution(spec)
+                distributions[f"{group}.{field}"] = spec.distribution
     return distributions
 
 

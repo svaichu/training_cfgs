@@ -1,25 +1,28 @@
-# Bounds/values can be declared directly in the file instead of being
-# attached afterward via set_bounds()/set_values() (see optuna_example.py
-# for that alternative, load-then-annotate pattern). `type` is optional in
-# a field's spec dict -- it's inferred from `default` when omitted.
+# An optuna.distributions object can be declared directly in the file
+# instead of being attached afterward via set_distribution() (see
+# optuna_example.py for that alternative, load-then-annotate pattern).
+# `type` is optional in a field's spec dict -- it's inferred from `default`
+# when omitted. `distribution` mirrors optuna's own
+# `distribution_to_json`/`json_to_distribution` shape: `{name: <class name>,
+# attributes: {...constructor kwargs...}}`.
 dataset:
   name: oxe
   batch_size:
     default: 32
-    bounds:
-      min: 8
-      max: 128
-      step: 8
+    distribution:
+      name: IntDistribution
+      attributes: {low: 8, high: 128, step: 8}
 
 training:
   learning_rate:
     type: float
     default: 1.0e-4
-    bounds:
-      min: 1.0e-5
-      max: 1.0e-2
-      log: true
+    distribution:
+      name: FloatDistribution
+      attributes: {low: 1.0e-5, high: 1.0e-2, log: true}
   optimizer:
     default: adam
-    values: [adam, sgd]
+    distribution:
+      name: CategoricalDistribution
+      attributes: {choices: [adam, sgd]}
   num_epochs: 100   # plain value: fixed, not sweepable

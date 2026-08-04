@@ -1,10 +1,11 @@
 """Example: run an Optuna hyperparameter search over a Config's sweepable fields.
 
-`set_bounds`/`set_values` are the same schema used for W&B sweep export
-(see `main.py` / `to_sweep`), so a config only needs to be annotated once
-to support both. `to_optuna_distributions()` exposes the search space
-up front; `suggest(trial)` returns a new, fully-populated `Config` per
-trial without mutating the original.
+`set_distribution` attaches a native `optuna.distributions` object to a
+field -- the exact same schema used for W&B sweep export (see `main.py` /
+`to_sweep`), so a config only needs to be annotated once to support both.
+`to_optuna_distributions()` exposes the search space up front;
+`suggest(trial)` returns a new, fully-populated `Config` per trial without
+mutating the original.
 
     python examples/optuna_example.py
 """
@@ -12,6 +13,7 @@ trial without mutating the original.
 from pathlib import Path
 
 import optuna
+from optuna.distributions import CategoricalDistribution, FloatDistribution, IntDistribution
 
 from training_cfgs import Config
 
@@ -20,9 +22,9 @@ DEFAULT_CONFIG = Path(__file__).parent / "sample_config.yaml"
 
 def build_config() -> Config:
     cfg = Config.from_file(DEFAULT_CONFIG)
-    cfg.set_bounds("training", "learning_rate", min=1e-5, max=1e-2, log=True)
-    cfg.set_values("training", "optimizer", ["adam", "sgd"])
-    cfg.set_bounds("dataset", "batch_size", min=8, max=128, step=8)
+    cfg.set_distribution("training", "learning_rate", FloatDistribution(1e-5, 1e-2, log=True))
+    cfg.set_distribution("training", "optimizer", CategoricalDistribution(["adam", "sgd"]))
+    cfg.set_distribution("dataset", "batch_size", IntDistribution(8, 128, step=8))
     return cfg
 
 

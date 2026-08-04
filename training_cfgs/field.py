@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Optional
+
+from optuna.distributions import (
+    BaseDistribution,
+    CategoricalDistribution,
+    IntDistribution,
+    distribution_to_json,
+    json_to_distribution,
+)
 
 
 def infer_type(value: Any) -> str:
@@ -23,6 +32,18 @@ def infer_type(value: Any) -> str:
     return type(value).__name__
 
 
+def _default_from_distribution(distribution: BaseDistribution) -> Any:
+    if isinstance(distribution, CategoricalDistribution):
+        return distribution.choices[0]
+    return distribution.low
+
+
+def _type_from_distribution(distribution: BaseDistribution) -> str:
+    if isinstance(distribution, CategoricalDistribution):
+        return infer_type(distribution.choices[0])
+    return "int" if isinstance(distribution, IntDistribution) else "float"
+
+
 @dataclass
 class FieldSpec:
     """Learned metadata for a single config field.
@@ -31,45 +52,51 @@ class FieldSpec:
     with both, inferred from a plain YAML/JSON value if the file didn't
     spell them out explicitly.
 
-    `bounds`/`values` are the hyperparameter opt settings that make a
-    field eligible for W&B sweep / Optuna export. The source file may
-    declare them directly, but they are typically attached afterward via
-    `Config.set_bounds`/`Config.set_values`.
+    `distribution` is an `optuna.distributions.BaseDistribution` (e.g.
+    `FloatDistribution`, `IntDistribution`, `CategoricalDistribution`) that
+    makes a field eligible for W&B sweep / Optuna export. The source file
+    may declare it directly, but it's typically attached afterward via
+    `Config.set_distribution`.
     """
 
     name: str
     type: str
     default: Any
-    bounds: Optional[dict] = None
-    values: Optional[list] = None
+    distribution: Optional[BaseDistribution] = None
     help: Optional[str] = None
 
     def is_sweepable(self) -> bool:
-        return self.bounds is not None or self.values is not None
+        return self.distribution is not None
 
     @classmethod
     def from_spec_dict(cls, name: str, spec: dict) -> "FieldSpec":
-        bounds = spec.get("bounds")
-        values = spec.get("values")
+        distribution = spec.get("distribution")
+        if isinstance(distribution, dict):
+            distribution = json_to_distribution(json.dumps(distribution))
+
         default = spec.get("default")
-        if default is None:
-            if bounds is not None and "min" in bounds:
-                default = bounds["min"]
-            elif values:
-                default = values[0]
+        if default is None and distribution is not None:
+            default = _default_from_distribution(distribution)
+
+        ftype = spec.get("type")
+        if ftype is None:
+            if default is not None:
+                ftype = infer_type(default)
+            elif distribution is not None:
+                ftype = _type_from_distribution(distribution)
+            else:
+                ftype = "str"
+
         return cls(
             name=name,
-            type=spec.get("type", infer_type(default) if default is not None else "str"),
+            type=ftype,
             default=default,
-            bounds=bounds,
-            values=values,
+            distribution=distribution,
             help=spec.get("help"),
         )
 
     def to_dict(self) -> dict:
         out: dict = {"type": self.type, "default": self.default}
-        if self.bounds is not None:
-            out["bounds"] = self.bounds
-        if self.values is not None:
-            out["values"] = self.values
+        if self.distribution is not None:
+            out["distribution"] = json.loads(distribution_to_json(self.distribution))
         return out

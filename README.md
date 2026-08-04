@@ -18,11 +18,12 @@ pip install -e ".[dev]"   # + pytest, for running the test suite
 ## Quick start
 
 ```python
+from optuna.distributions import CategoricalDistribution, FloatDistribution
 from training_cfgs import Config
 
 cfg = Config.from_file("config.yaml")
-cfg.set_bounds("training", "learning_rate", min=1e-5, max=1e-2, log=True)
-cfg.set_values("training", "optimizer", ["adam", "sgd"])
+cfg.set_distribution("training", "learning_rate", FloatDistribution(1e-5, 1e-2, log=True))
+cfg.set_distribution("training", "optimizer", CategoricalDistribution(["adam", "sgd"]))
 
 # W&B sweep export
 sweep = cfg.to_sweep()
