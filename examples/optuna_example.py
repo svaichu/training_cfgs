@@ -4,7 +4,7 @@
 field -- the exact same schema used for W&B sweep export (see `main.py` /
 `to_sweep`), so a config only needs to be annotated once to support both.
 `to_optuna_distributions()` exposes the search space up front;
-`suggest(trial)` returns a new, fully-populated `Config` per trial without
+`get_current_from_optuna(trial)` returns a new, fully-populated `Config` per trial without
 mutating the original.
 
     python examples/optuna_example.py
@@ -42,7 +42,7 @@ def main() -> None:
     print("Search space:", cfg.to_optuna_distributions())
 
     def objective(trial: optuna.Trial) -> float:
-        trial_cfg = cfg.suggest(trial)
+        trial_cfg = cfg.get_current_from_optuna(trial)
         return fake_train(trial_cfg)
 
     study = optuna.create_study(direction="minimize")

@@ -26,8 +26,8 @@ W&B sweep export::
     cfg.to_sweep_file("sweep.yaml", method="bayes", metric={"name": "loss", "goal": "minimize"})
 
 The same `optuna.distributions` schema also drives two-way Optuna
-compatibility: `to_optuna_distributions()`/`suggest(trial)` build a search
-space and turn an `optuna.Trial` into a `Config`, and
+compatibility: `to_optuna_distributions()`/`get_current_from_optuna(trial)`
+build a search space and turn an `optuna.Trial` into a `Config`, and
 `from_optuna_params()`/`from_optuna_study()` load the winning config back
 (see `optuna_compat.py`).
 
@@ -422,14 +422,14 @@ class Config:
         """Build a dict of `optuna.distributions`, keyed `'group.field'`, from sweepable fields."""
         return optuna_compat.to_optuna_distributions(self, groups=groups)
 
-    def suggest(self, trial: Any, groups: Optional[list[str]] = None) -> "Config":
+    def get_current_from_optuna(self, trial: Any, groups: Optional[list[str]] = None) -> "Config":
         """Return a new `Config` with sweepable fields set from an `optuna.Trial`'s suggestions.
 
             def objective(trial):
-                trial_cfg = cfg.suggest(trial)
+                trial_cfg = cfg.get_current_from_optuna(trial)
                 return train(trial_cfg)
         """
-        return optuna_compat.suggest(self, trial, groups=groups)
+        return optuna_compat.get_current_from_optuna(self, trial, groups=groups)
 
     def from_optuna_params(self, params: dict) -> "Config":
         """Return a new `Config` with dotted `'group.field'` params (e.g. `trial.params`) applied."""

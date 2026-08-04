@@ -102,7 +102,7 @@ cfg.unknown_group(x=1)
 
 `cfg.clone()` returns an independent copy that preserves the full schema
 (types, distributions) — useful whenever you need to hand out a per-trial
-or per-run variant without mutating the original (this is how `suggest()`
+or per-run variant without mutating the original (this is how `get_current_from_optuna()`
 and `from_optuna_params()` build their returned configs, see below).
 
 ## Hyperparameter opt settings (`optuna.distributions`)
@@ -369,7 +369,7 @@ samplers/APIs that want the search space up front
 distribution-aware samplers) without running a trial.
 
 **2. `optuna.Trial` → a fully-populated `Config` (per-trial values).**
-`suggest(trial, groups=None)` is what an objective function calls each
+`get_current_from_optuna(trial, groups=None)` is what an objective function calls each
 trial. For every sweepable field it calls `trial._suggest(key,
 spec.distribution)` and writes the result into a **clone** of the config —
 the original `cfg` and every non-sweepable field (`num_epochs` in the
@@ -383,14 +383,14 @@ cfg.set_distribution("training", "learning_rate", FloatDistribution(1e-5, 1e-2, 
 cfg.set_distribution("training", "optimizer", CategoricalDistribution(["adam", "sgd"]))
 
 def objective(trial: optuna.Trial) -> float:
-    trial_cfg = cfg.suggest(trial)          # -> Config, e.g. lr=0.0032, optimizer="sgd"
+    trial_cfg = cfg.get_current_from_optuna(trial)          # -> Config, e.g. lr=0.0032, optimizer="sgd"
     return train(trial_cfg)                 # trial_cfg.training.num_epochs == cfg's original value
 
 study = optuna.create_study(direction="minimize")
 study.optimize(objective, n_trials=50)      # calls objective(trial) once per trial
 ```
 
-Because `suggest()` clones (`Config.clone()`) instead of mutating `cfg` in
+Because `get_current_from_optuna()` clones (`Config.clone()`) instead of mutating `cfg` in
 place, the same `cfg` object is safe to reuse across every trial in the
 study — nothing needs to be reset between calls.
 
@@ -415,8 +415,9 @@ with a `Config` of the same shape you started with.
 
 ### Validation and edge cases
 
-- A sweepable field needs a `distribution` attached — `to_optuna_distributions`/
-  `suggest` raise `ValueError` naming the field if `spec.distribution` is `None`.
+- A field with no `distribution` attached is simply skipped by
+  `to_optuna_distributions`/`get_current_from_optuna` — it's not part of the
+  search space, and its value carries over unchanged from the original config.
 - `from_optuna_params` raises `ValueError` for a key without a `.`
   (`{"learning_rate": ...}` instead of `{"training.learning_rate": ...}`),
   matching `apply_args`'s strictness for CLI/`wandb.config` overrides.
@@ -444,7 +445,7 @@ with a `Config` of the same shape you started with.
 | `save(path)` | Write to `.yaml`/`.yml`/`.json` |
 | `to_sweep(method="bayes", metric=None, groups=None)` / `to_sweep_file(path, ...)` | Build/write a W&B-compatible sweep config |
 | `to_optuna_distributions(groups=None)` | Build a dict of `optuna.distributions`, keyed `"group.field"` |
-| `suggest(trial, groups=None)` | New `Config` with sweepable fields set from an `optuna.Trial`'s suggestions |
+| `get_current_from_optuna(trial, groups=None)` | New `Config` with sweepable fields set from an `optuna.Trial`'s suggestions |
 | `from_optuna_params(params)` | New `Config` with dotted `"group.field"` params (e.g. `trial.params`) applied |
 | `from_optuna_study(study)` | New `Config` with a completed `optuna.Study`'s `best_params` applied |
 

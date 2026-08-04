@@ -33,7 +33,7 @@ cfg = Config.from_cli(default_config="config.yaml")
 
 # Optuna search, same schema as the sweep export above
 def objective(trial):
-    trial_cfg = cfg.suggest(trial)
+    trial_cfg = cfg.get_current_from_optuna(trial)
     return train(trial_cfg)
 
 study = optuna.create_study(direction="minimize")

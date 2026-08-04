@@ -10,7 +10,7 @@ Building a search space and running a study::
     distributions = cfg.to_optuna_distributions()   # optuna.distributions, keyed 'group.field'
 
     def objective(trial):
-        trial_cfg = cfg.suggest(trial)               # sweepable fields replaced with trial suggestions
+        trial_cfg = cfg.get_current_from_optuna(trial)   # sweepable fields replaced with trial suggestions
         return train(trial_cfg)
 
     study = optuna.create_study(direction="minimize")
@@ -69,14 +69,14 @@ def to_optuna_distributions(config: "Config", groups: Optional[list[str]] = None
     return distributions
 
 
-def suggest(config: "Config", trial: Any, groups: Optional[list[str]] = None) -> "Config":
+def get_current_from_optuna(config: "Config", trial: Any, groups: Optional[list[str]] = None) -> "Config":
     """Return a new `Config` with every sweepable field replaced by `trial`'s suggestion.
 
     Non-sweepable fields keep their current values unchanged. Use inside an
     Optuna objective function::
 
         def objective(trial):
-            trial_cfg = cfg.suggest(trial)
+            trial_cfg = cfg.get_current_from_optuna(trial)
             return train(trial_cfg)
     """
     cfg = config.clone()

@@ -41,12 +41,12 @@ def test_to_optuna_distributions_returns_the_attached_distributions():
     assert lr_dist is cfg.schema("training", "learning_rate").distribution
 
 
-def test_suggest_returns_new_config_without_mutating_original():
+def test_get_current_from_optuna_returns_new_config_without_mutating_original():
     cfg = _make_cfg()
     study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
     trial = study.ask()
 
-    trial_cfg = cfg.suggest(trial)
+    trial_cfg = cfg.get_current_from_optuna(trial)
 
     assert 1e-5 <= trial_cfg.training.learning_rate <= 1e-2
     assert trial_cfg.training.optimizer in ("adam", "sgd")
@@ -57,11 +57,11 @@ def test_suggest_returns_new_config_without_mutating_original():
     assert cfg.training.optimizer == "adam"
 
 
-def test_suggest_is_usable_inside_an_optuna_study():
+def test_get_current_from_optuna_is_usable_inside_an_optuna_study():
     cfg = _make_cfg()
 
     def objective(trial):
-        trial_cfg = cfg.suggest(trial)
+        trial_cfg = cfg.get_current_from_optuna(trial)
         return (trial_cfg.training.learning_rate - 1e-3) ** 2
 
     study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
@@ -88,7 +88,7 @@ def test_from_optuna_study_round_trips_the_winning_config():
     cfg = _make_cfg()
 
     def objective(trial):
-        trial_cfg = cfg.suggest(trial)
+        trial_cfg = cfg.get_current_from_optuna(trial)
         return (trial_cfg.training.learning_rate - 1e-3) ** 2
 
     study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
@@ -107,7 +107,7 @@ def test_from_optuna_params_raises_for_non_dotted_key():
         cfg.from_optuna_params({"learning_rate": 1e-3})
 
 
-def test_int_field_with_distribution_uses_suggest_int():
+def test_int_field_with_distribution_suggests_an_int():
     cfg = Config()
     cfg.define("training", "batch_size", default=32, type="int")
     cfg.training(batch_size=32)
@@ -118,15 +118,15 @@ def test_int_field_with_distribution_uses_suggest_int():
 
     study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
     trial = study.ask()
-    trial_cfg = cfg.suggest(trial)
+    trial_cfg = cfg.get_current_from_optuna(trial)
     assert isinstance(trial_cfg.training.batch_size, int)
     assert 8 <= trial_cfg.training.batch_size <= 256
 
 
-def test_suggest_raises_for_field_without_a_distribution():
+def test_field_without_a_distribution_is_not_part_of_the_search_space():
     cfg = Config()
     cfg.define("training", "learning_rate", default=1e-4, type="float")
     cfg.training(learning_rate=1e-4)
-    # `is_sweepable()` is False without a distribution, so `suggest`/`to_optuna_distributions`
-    # simply skip the field rather than erroring -- confirm that skip behavior here.
+    # `is_sweepable()` is False without a distribution, so `get_current_from_optuna`/
+    # `to_optuna_distributions` simply skip the field rather than erroring.
     assert cfg.to_optuna_distributions() == {}
