@@ -54,6 +54,38 @@ training:
     assert opt_spec.values == ["adam", "sgd"]
 
 
+def test_from_yaml_learns_bounds_and_values_without_explicit_type(tmp_path):
+    # `type` is optional in a spec dict (inferred from `default`); a field
+    # entry that only carries `default` + `bounds`/`values` must still be
+    # recognized as a spec dict, not swallowed as a literal dict-typed value.
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text(
+        """
+training:
+  learning_rate:
+    default: 1.0e-4
+    bounds:
+      min: 1.0e-5
+      max: 1.0e-2
+  optimizer:
+    default: adam
+    values: [adam, sgd]
+"""
+    )
+    cfg = Config.from_yaml(yaml_path)
+
+    lr_spec = cfg.schema("training", "learning_rate")
+    assert lr_spec.type == "float"
+    assert lr_spec.default == 1e-4
+    assert lr_spec.bounds == {"min": 1e-5, "max": 1e-2}
+    assert cfg.training.learning_rate == 1e-4
+
+    opt_spec = cfg.schema("training", "optimizer")
+    assert opt_spec.type == "str"
+    assert opt_spec.values == ["adam", "sgd"]
+    assert cfg.training.optimizer == "adam"
+
+
 def test_from_json_roundtrip(tmp_path):
     json_path = tmp_path / "config.json"
     data = {"dataset": {"name": "libero", "batch_size": 16}}

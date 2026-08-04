@@ -60,13 +60,20 @@ cfg = Config.from_json("config.json")
 cfg = Config.from_dict({"dataset": {"name": "oxe"}})
 ```
 
-`from_yaml` requires `pyyaml` (`pip install training-cfgs[config]` or
-`pip install pyyaml`); it's imported lazily so plain dict/JSON usage needs no
-extra dependency.
+`pyyaml` and `optuna` are core dependencies (`pip install training-cfgs`
+pulls in both), so `from_yaml`/Optuna support work out of the box with no
+extras to remember.
 
-A field may also be spelled out explicitly as `{type: ..., default: ...}` in
-the file, which is required if you want to declare `bounds`/`values` (see
-below) directly in the file rather than attaching them afterward.
+A field may also be spelled out explicitly as a spec dict —
+`{type: ..., default: ..., bounds: ..., values: ..., help: ...}` — which is
+how `bounds`/`values` (see below) get declared directly in the file instead
+of being attached afterward. `type` itself is optional in a spec dict: it's
+inferred from `default` exactly like a plain value would be, so
+`{default: 1.0e-4, bounds: {min: 1.0e-5, max: 1.0e-2}}` and
+`{type: float, default: 1.0e-4, bounds: {min: 1.0e-5, max: 1.0e-2}}` are
+equivalent. Any one of `type`/`bounds`/`values`/`help` present is enough for
+the loader to treat the mapping as a spec dict rather than a literal
+`dict`-typed value.
 
 ## Reading and updating values
 
@@ -99,12 +106,15 @@ and `from_optuna_params()` build their returned configs, see below).
 
 ## Hyperparameter opt settings (bounds / values)
 
-A field's file entry doesn't need to carry any search-space info. The usual
-flow is to load the plain config, then attach bounds/values afterward — this
-is what makes a field eligible for W&B sweep export *and* Optuna search
-spaces, from the same schema:
+A field's file entry doesn't need to carry any search-space info. There are
+two equally valid ways to attach it, and both produce the exact same
+schema — which is what makes a field eligible for W&B sweep export *and*
+Optuna search spaces:
+
+**1. Load a plain config, then attach bounds/values in Python:**
 
 ```python
+cfg = Config.from_file("config.yaml")   # plain values only
 cfg.set_bounds("training", "learning_rate", min=1e-5, max=1e-2)
 cfg.set_values("training", "optimizer", ["adam", "sgd"])
 
@@ -113,9 +123,37 @@ cfg.training.set_bounds("learning_rate", min=1e-5, max=1e-2)
 cfg.training.set_values("optimizer", ["adam", "sgd"])
 ```
 
+**2. Declare `bounds`/`values` directly in the file** — no Python step
+needed; the field is sweepable the moment the file is loaded:
+
+```yaml
+# config.yaml
+training:
+  learning_rate:
+    default: 1.0e-4        # type inferred as float; "type: float" also works
+    bounds:
+      min: 1.0e-5
+      max: 1.0e-2
+  optimizer:
+    default: adam
+    values: [adam, sgd]
+  num_epochs: 100           # plain value: fixed, not sweepable
+```
+
+```python
+cfg = Config.from_file("config.yaml")
+cfg.schema("training", "learning_rate").bounds   # {"min": 1e-05, "max": 0.01} -- already set
+```
+
+See [`examples/sweepable_config.yaml`](../examples/sweepable_config.yaml) /
+[`examples/sweepable_config_example.py`](../examples/sweepable_config_example.py)
+for a complete runnable version of approach 2, including `log`/`step`.
+
 `set_bounds` forwards any extra keyword straight into the field's `bounds`
-dict, so `log=True` (log-uniform sampling) and `step=...` (discretized
-range) — both recognized by the Optuna integration below — work directly:
+dict (in Python or in the file — `bounds: {min: ..., max: ..., log: ...}`
+works the same either way), so `log=True` (log-uniform sampling) and
+`step=...` (discretized range) — both recognized by the Optuna integration
+below — work directly:
 
 ```python
 cfg.set_bounds("training", "learning_rate", min=1e-5, max=1e-2, log=True)
@@ -280,59 +318,104 @@ sweep["parameters"]["training.num_epochs"]     # {"value": 100}  (fixed, not swe
 ## Optuna integration
 
 The same `bounds`/`values` schema that drives W&B sweep export also drives
-two-way [Optuna](https://optuna.org/) compatibility — no separate search-space
-definition needed. Requires `optuna` (`pip install training-cfgs[optuna]` or
-`pip install optuna`), imported lazily so the rest of the package needs no
-extra dependency.
+two-way [Optuna](https://optuna.org/) compatibility — nothing extra to
+declare, and no schema translation layer to maintain by hand. `optuna` is a
+core dependency, installed automatically with the package. All of the logic
+below lives in [`training_cfgs/optuna_compat.py`](../training_cfgs/optuna_compat.py)
+and is exposed as four `Config` methods; runnable end-to-end example:
+[`examples/optuna_example.py`](../examples/optuna_example.py).
 
-Runnable example: [`examples/optuna_example.py`](../examples/optuna_example.py).
+### The interface, precisely
 
-### Building a search space and running a study
+There are two directions of translation, and `Config` never imports
+`optuna.Trial`/`optuna.Study` as concrete types — it only calls the handful
+of methods it needs (`trial.suggest_float`/`suggest_int`/`suggest_categorical`,
+`study.best_params`), so any object with that shape works, including
+Optuna's own `FrozenTrial`/mocks in tests.
+
+**1. `Config` schema → `optuna.distributions` (the search space).**
+`to_optuna_distributions(groups=None)` walks every field whose `FieldSpec`
+`is_sweepable()` (has `bounds` or `values` set — see the previous section)
+and converts each one, keyed `"group.field"`:
+
+| Field's schema | → | `optuna.distributions` object |
+|---|---|---|
+| `values=[...]` (any `type`) | → | `CategoricalDistribution(values)` |
+| `type="int"`, `bounds={min, max, log?, step?}` | → | `IntDistribution(min, max, log=log, step=step or 1)` |
+| `type="float"` (or anything else), `bounds={min, max, log?, step?}` | → | `FloatDistribution(min, max, log=log, step=step)` |
+
+`bounds["log"]`/`bounds["step"]` are the exact same keys `set_bounds(...,
+log=True, step=8)` writes into `spec.bounds` — there's no separate Optuna
+config, they're read straight off the W&B-sweep-compatible `bounds` dict.
+A field with `values` set always becomes categorical, regardless of `type`.
+Non-sweepable fields (plain values, no `bounds`/`values`) are skipped
+entirely — they're not part of the search space.
+
+```python
+distributions = cfg.to_optuna_distributions()
+# {"training.learning_rate": FloatDistribution(low=1e-5, high=1e-2, log=True, step=None),
+#  "training.optimizer": CategoricalDistribution(choices=("adam", "sgd"))}
+```
+
+This dict on its own is useful for samplers/APIs that want the search space
+up front (`study.enqueue_trial(params, skip_if_exists=True)`,
+`study.add_trial(...)`, distribution-aware samplers) without running a
+trial.
+
+**2. `optuna.Trial` → a fully-populated `Config` (per-trial values).**
+`suggest(trial, groups=None)` is what an objective function calls each
+trial. For every sweepable field it calls the matching `trial.suggest_*`
+(`suggest_categorical` for `values`, `suggest_int`/`suggest_float` for
+`bounds`, using the same `log`/`step` mapping as the table above) and writes
+the result into a **clone** of the config — the original `cfg` and every
+non-sweepable field (`num_epochs` in the example below) are left untouched:
 
 ```python
 cfg = Config.from_file("config.yaml")
 cfg.set_bounds("training", "learning_rate", min=1e-5, max=1e-2, log=True)
 cfg.set_values("training", "optimizer", ["adam", "sgd"])
 
-distributions = cfg.to_optuna_distributions()   # optuna.distributions, keyed 'group.field'
-
-def objective(trial):
-    trial_cfg = cfg.suggest(trial)   # new Config: sweepable fields replaced by trial's suggestion
-    return train(trial_cfg)
+def objective(trial: optuna.Trial) -> float:
+    trial_cfg = cfg.suggest(trial)          # -> Config, e.g. lr=0.0032, optimizer="sgd"
+    return train(trial_cfg)                 # trial_cfg.training.num_epochs == cfg's original value
 
 study = optuna.create_study(direction="minimize")
-study.optimize(objective, n_trials=50)
+study.optimize(objective, n_trials=50)      # calls objective(trial) once per trial
 ```
 
-- `to_optuna_distributions(groups=None)` builds a dict of `optuna.distributions`
-  objects (`FloatDistribution`, `IntDistribution`, `CategoricalDistribution`),
-  keyed `"group.field"` — useful for `study.enqueue_trial`/`add_trial` or any
-  sampler that wants the search space up front.
-- `suggest(trial, groups=None)` returns a **new** `Config` (via `clone()`) with
-  every sweepable field replaced by `trial`'s suggestion; non-sweepable fields
-  and the original config are left untouched. `bounds["log"]` (bool) and
-  `bounds["step"]` map directly onto `trial.suggest_float`/`suggest_int`'s
-  `log`/`step` kwargs — the same extras `set_bounds(..., log=True)` attaches.
+Because `suggest()` clones (`Config.clone()`) instead of mutating `cfg` in
+place, the same `cfg` object is safe to reuse across every trial in the
+study — nothing needs to be reset between calls.
 
-### Loading the winning config back
+**3. The winning trial's params → a `Config` (loading the result back).**
+`from_optuna_study(study)` reads `study.best_params` (a plain
+`{"group.field": value, ...}` dict, Optuna's own trial-recording format) and
+applies it onto a clone of `cfg`, exactly like `apply_args`/`set_values` do
+for CLI/file overrides. `from_optuna_params(params)` is the same operation
+against *any* dotted-key dict — `study.best_params`, `trial.params` from a
+specific completed trial, or a dict you built by hand:
 
 ```python
-best_cfg = cfg.from_optuna_study(study)              # study.best_params
-best_cfg = cfg.from_optuna_params(trial.params)       # any dotted-key params dict
+best_cfg = cfg.from_optuna_study(study)          # study.best_params
+best_cfg = cfg.from_optuna_params(trial.params)  # one specific trial's params
 ```
 
 Both return a clone with the given `"group.field"` params applied on top of
-the original config's other values — so fixed (non-sweepable) fields like
-`num_epochs` above are carried over unchanged.
+the original config's other values, so fixed (non-sweepable) fields like
+`num_epochs` are carried over unchanged — the round trip is
+`cfg.set_bounds/set_values` → `study.optimize` → `cfg.from_optuna_study`,
+ending with a `Config` of the same shape you started with.
 
-### Notes
+### Validation and edge cases
 
 - A sweepable field needs both `bounds["min"]` and `bounds["max"]` (for
   ranges) or `values` (for categorical) — `to_optuna_distributions`/`suggest`
-  raise `ValueError` for a field with only one bound set.
-- `int`-typed fields become `optuna.distributions.IntDistribution`;
-  `float`-typed fields become `FloatDistribution`; fields with `values` set
-  become `CategoricalDistribution` regardless of type.
+  raise `ValueError` naming the field if only one bound is set.
+- `from_optuna_params` raises `ValueError` for a key without a `.`
+  (`{"learning_rate": ...}` instead of `{"training.learning_rate": ...}`),
+  matching `apply_args`'s strictness for CLI/`wandb.config` overrides.
+- `groups=[...]` on any of the four methods restricts them to specific
+  top-level groups, same as `to_sweep(groups=...)`.
 
 ## API summary
 

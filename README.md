@@ -7,11 +7,12 @@ all driven by the same schema.
 
 ## Install
 
+`pyyaml` and `optuna` are core dependencies — a plain install always gets
+YAML config loading and Optuna support, no extras to remember:
+
 ```bash
-pip install -e .              # core (no YAML/CLI file loading)
-pip install -e ".[config]"    # + pyyaml, for YAML config files
-pip install -e ".[optuna]"    # + optuna, for hyperparameter search
-pip install -e ".[dev]"       # + pytest, pyyaml, optuna — everything needed to run the tests
+pip install -e .          # pulls in pyyaml + optuna
+pip install -e ".[dev]"   # + pytest, for running the test suite
 ```
 
 ## Quick start

@@ -21,22 +21,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
+import optuna
+
 from .field import FieldSpec
 
 if TYPE_CHECKING:
     from .config import Config
-
-
-def _require_optuna():
-    """Import optuna lazily so the rest of the config system needs no extra deps."""
-    try:
-        import optuna
-    except ImportError as exc:
-        raise ImportError(
-            "Optuna support requires optuna. Install it with "
-            "'pip install training-cfgs[optuna]' or 'pip install optuna'."
-        ) from exc
-    return optuna
 
 
 def _bounds_or_raise(spec: FieldSpec) -> dict:
@@ -55,7 +45,6 @@ def field_to_distribution(spec: FieldSpec):
     `bounds` may carry `log` (bool) and `step` on top of `min`/`max`, matching
     the extra kwargs `Config.set_bounds` already passes through.
     """
-    optuna = _require_optuna()
     if spec.values is not None:
         return optuna.distributions.CategoricalDistribution(list(spec.values))
 
@@ -95,7 +84,6 @@ def to_optuna_distributions(config: "Config", groups: Optional[list[str]] = None
     Suitable for `optuna.study.Study.enqueue_trial` / `add_trial` / distribution-aware
     samplers that need the search space up front.
     """
-    _require_optuna()
     distributions: dict = {}
     for group, fields in config._schema.items():
         if groups is not None and group not in groups:
@@ -116,7 +104,6 @@ def suggest(config: "Config", trial: Any, groups: Optional[list[str]] = None) ->
             trial_cfg = cfg.suggest(trial)
             return train(trial_cfg)
     """
-    _require_optuna()
     cfg = config.clone()
     for group, fields in config._schema.items():
         if groups is not None and group not in groups:

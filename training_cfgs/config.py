@@ -50,6 +50,8 @@ import json
 from pathlib import Path
 from typing import Any, Optional, Sequence, Union
 
+import yaml
+
 from . import optuna_compat
 from .cli import add_config_arguments, apply_namespace, normalize_type
 from .field import FieldSpec, infer_type
@@ -57,17 +59,17 @@ from .group import Group
 
 PathLike = Union[str, Path]
 
+# Keys that mark a dict value as a field spec (`FieldSpec.from_spec_dict`)
+# rather than a literal `dict`-typed value. `type` alone used to be required,
+# which meant a YAML entry like `{default: 1e-4, bounds: {min: ..., max: ...}}`
+# silently became a `dict`-typed field whose default was the whole dict
+# instead of a sweepable float — `type` is optional (inferred from
+# `default`), so `bounds`/`values`/`help` must trigger the same path.
+_SPEC_DICT_KEYS = {"type", "bounds", "values", "help"}
 
-def _require_yaml():
-    """Import pyyaml lazily so plain dict/JSON config use needs no extra deps."""
-    try:
-        import yaml
-    except ImportError as exc:
-        raise ImportError(
-            "YAML config support requires pyyaml. Install it with "
-            "'pip install training-cfgs[config]' or 'pip install pyyaml'."
-        ) from exc
-    return yaml
+
+def _is_spec_dict(value: Any) -> bool:
+    return isinstance(value, dict) and not _SPEC_DICT_KEYS.isdisjoint(value)
 
 
 class Config:
@@ -168,7 +170,7 @@ class Config:
         self._sync_parser()
 
     def _set_field(self, group: str, field: str, value: Any) -> None:
-        if isinstance(value, dict) and "type" in value:
+        if _is_spec_dict(value):
             spec = FieldSpec.from_spec_dict(field, value)
             self._schema[group][field] = spec
             self._groups[group][field] = spec.default
@@ -193,7 +195,7 @@ class Config:
                 f"Unknown field '{group}.{field}'; define it with "
                 f"Config.define('{group}', '{field}', ...) or load it from a file first"
             )
-        if isinstance(value, dict) and "type" in value:
+        if _is_spec_dict(value):
             spec = FieldSpec.from_spec_dict(field, value)
             self._schema[group][field] = spec
             self._groups[group][field] = spec.default
@@ -244,7 +246,6 @@ class Config:
 
     @classmethod
     def from_yaml(cls, path: PathLike) -> "Config":
-        yaml = _require_yaml()
         with open(path) as f:
             data = yaml.safe_load(f) or {}
         return cls.from_dict(data)
@@ -369,7 +370,6 @@ class Config:
     def save(self, path: PathLike) -> None:
         path = Path(path)
         if path.suffix in (".yaml", ".yml"):
-            yaml = _require_yaml()
             with open(path, "w") as f:
                 yaml.safe_dump(self.to_dict(), f, sort_keys=False)
         elif path.suffix == ".json":
@@ -418,7 +418,6 @@ class Config:
         metric: Optional[dict] = None,
         groups: Optional[list[str]] = None,
     ) -> None:
-        yaml = _require_yaml()
         sweep_config = self.to_sweep(method=method, metric=metric, groups=groups)
         with open(path, "w") as f:
             yaml.safe_dump(sweep_config, f, sort_keys=False)
