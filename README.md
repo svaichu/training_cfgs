@@ -20,11 +20,11 @@ pip install -e ".[dev]"   # + pytest, for running the test suite
 ## Quick start
 
 ```python
-from training_cfgs import Config, distributions, study
+from training_cfgs import CategoricalDistribution, Config, FloatDistribution, create_study
 
 cfg = Config.from_file("config.yaml")
-cfg.set_distribution("training", "learning_rate", distributions.FloatDistribution(1e-5, 1e-2, log=True))
-cfg.set_distribution("training", "optimizer", distributions.CategoricalDistribution(["adam", "sgd"]))
+cfg.set_distribution("training", "learning_rate", FloatDistribution(1e-5, 1e-2, log=True))
+cfg.set_distribution("training", "optimizer", CategoricalDistribution(["adam", "sgd"]))
 
 # W&B sweep export
 sweep = cfg.to_sweep()
@@ -33,7 +33,7 @@ sweep = cfg.to_sweep()
 cfg = Config.from_cli(default_config="config.yaml")
 
 # Optuna search, same schema as the sweep export above
-study = study.create_study(direction="minimize")
+study = create_study(direction="minimize")
 cfg.single_objective_optimization(study, train, n_trials=50)
 best_cfg = cfg.best_from_optuna(study)
 ```
