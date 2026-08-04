@@ -30,5 +30,8 @@ docs = [
 [tool.setuptools.packages.find]
 include = ["training_cfgs*"]
 
+[tool.setuptools.package-data]
+training_cfgs = ["*.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
