@@ -131,10 +131,28 @@ export uses, so a `wandb agent` command line
 Precedence is **defaults < config file < CLI**: options the user didn't pass
 keep their config values.
 
-Runnable examples: [`examples/train_cli_example.py`](../examples/train_cli_example.py)
+Runnable examples: [`examples/load_from_yaml_example.py`](../examples/load_from_yaml_example.py)
+(`Config.from_yaml()` then `parse_args()` directly, no `--config` flag),
+[`examples/train_cli_example.py`](../examples/train_cli_example.py)
 (`Config.from_cli()` loading a YAML file) and
 [`examples/train_cli_programmatic_example.py`](../examples/train_cli_programmatic_example.py)
 (`add_argument()` building the schema entirely in Python).
+
+**Loading from YAML/JSON already wires up the CLI — no extra step.** Every
+`from_yaml`/`from_json`/`from_file`/`from_dict` call ends by resyncing
+`cfg.parser` with the fields it just learned, so `cfg.parse_args()` works
+immediately:
+
+```python
+cfg = Config.from_yaml("config.yaml")
+cfg.parse_args()   # --dataset.*, --training.* etc. are already there
+```
+
+`set_bounds`/`set_values` resync the parser too (so `values` becomes an
+argparse `choices` option right away), and `add_argument()`/`define()`
+extend the same parser incrementally as new fields are registered. The only
+time you call `add_arguments(parser)` yourself is to compose config options
+into a *separate*, externally-owned parser (see below).
 
 The one-liner for a train script is `Config.from_cli()`, which handles
 `--config <file>` plus overrides:
