@@ -40,6 +40,7 @@ study.optimize(objective, n_trials=50)
 best_cfg = cfg.from_optuna_study(study)
 ```
 
-See [`doc/config.md`](doc/config.md) for the full guide (loading, CLI
-overrides, W&B sweeps, Optuna) and [`examples/`](examples/) for runnable
-scripts.
+See [`doc/config.md`](doc/config.md) (or the hosted [Read the Docs
+site](https://training-cfgs.readthedocs.io/), once connected) for the full
+guide (loading, CLI overrides, W&B sweeps, Optuna) and
+[`examples/`](examples/) for runnable scripts.
