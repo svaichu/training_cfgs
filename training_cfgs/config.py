@@ -1,11 +1,57 @@
-"""Fluent, self-learning config builder for model training."""
+"""Fluent, self-learning config builder for model training.
+
+`Config` groups fields under top-level categories (e.g. `dataset`,
+`training`) and generates group methods dynamically. A group/field must
+exist — either loaded from a file or explicitly registered with
+`define()` — before it can be set through the fluent API; setting an
+unknown group or field raises rather than silently creating it::
+
+    cfg = Config()
+    cfg.define("dataset", "name", default="oxe")
+    cfg.define("dataset", "batch_size", default=32)
+    cfg.dataset(name="oxe", batch_size=32)
+
+Loading a YAML/JSON file teaches the config its groups, field names, and
+each field's `type`/`default`. The file doesn't need to carry any
+hyperparameter opt info (`bounds`/`values`) — that's typically attached
+afterward via `set_bounds`/`set_values`, which is what makes a field
+eligible for W&B sweep export::
+
+    cfg = Config.from_file("config.yaml")
+    cfg.set_bounds("training", "learning_rate", min=1e-5, max=1e-2)
+    cfg.set_values("training", "optimizer", ["adam", "sgd"])
+    cfg.to_sweep_file("sweep.yaml", method="bayes", metric={"name": "loss", "goal": "minimize"})
+
+The same `bounds`/`values` schema also drives two-way Optuna compatibility:
+`to_optuna_distributions()`/`suggest(trial)` build a search space and turn an
+`optuna.Trial` into a `Config`, and `from_optuna_params()`/`from_optuna_study()`
+load the winning config back (see `optuna_compat.py`).
+
+Command-line overrides follow the standard training-script pattern: every
+known field is exposed as a dotted, typed `--<group>.<field>` argparse
+option (the same keys the W&B sweep export uses, so `wandb agent` command
+lines parse directly), with precedence defaults < config file < CLI. A
+`Config` owns an internal `argparse.ArgumentParser` that stays in sync with
+its schema, so `add_argument()` doubles as `define()` + CLI exposure::
+
+    cfg = Config(description="Train a policy")
+    cfg.add_argument("dataset.name", default="oxe")
+    cfg.add_argument("training.learning_rate", default=1e-4, type=float)
+    cfg.parse_args()   # parses sys.argv, applies overrides in place
+
+    cfg = Config.from_cli(default_config="config.yaml")
+    # python train.py --config other.yaml --training.learning_rate 1e-3
+"""
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional, Sequence, Union
 
+from . import optuna_compat
+from .cli import add_config_arguments, apply_namespace, normalize_type
 from .field import FieldSpec, infer_type
 from .group import Group
 
@@ -27,9 +73,13 @@ def _require_yaml():
 class Config:
     """A dynamically-learned, fluent config object."""
 
-    def __init__(self) -> None:
-        object.__setattr__(self, "_groups", {})
-        object.__setattr__(self, "_schema", {})
+    def __init__(self, description: Optional[str] = None) -> None:
+        object.__setattr__(self, "_groups", {})  # group -> {field: value}
+        object.__setattr__(self, "_schema", {})  # group -> {field: FieldSpec}
+        object.__setattr__(self, "_description", description)
+        object.__setattr__(self, "_parser", argparse.ArgumentParser(description=description))
+
+    # -- fluent group access -------------------------------------------------
 
     def __getattr__(self, name: str) -> Group:
         if name.startswith("_"):
@@ -56,17 +106,66 @@ class Config:
     def schema(self, group: str, field: str) -> Optional[FieldSpec]:
         return self._schema.get(group, {}).get(field)
 
+    # -- explicit registration ------------------------------------------------
+
     def define(self, group: str, field: str, default: Any = None, type: Optional[str] = None, **extra: Any) -> "Config":
+        """Register a new field (creating its group if needed) so it can be set via the fluent API."""
         ftype = type if type is not None else (infer_type(default) if default is not None else "str")
         spec_dict: dict = {"type": ftype, "default": default, **extra}
         self._update_group(group, {field: spec_dict})
         return self
+
+    def add_argument(
+        self,
+        name: str,
+        default: Any = None,
+        type: Any = None,
+        help: Optional[str] = None,
+        choices: Optional[list] = None,
+        **extra: Any,
+    ) -> "Config":
+        """argparse-style shorthand: register a field and expose it as a CLI option in one call.
+
+        `name` is a dotted `"group.field"` (a leading `--` is stripped, so
+        `cfg.add_argument("--training.learning_rate", default=1e-4, type=float)`
+        also works). `type` accepts a Python type (`int`, `float`, `bool`,
+        `list`, `dict`) or the schema's string name. Equivalent to `define()`
+        immediately followed by exposing the field on `cfg.parser`::
+
+            cfg = Config(description="Train a policy")
+            cfg.add_argument("dataset.name", default="oxe")
+            cfg.add_argument("training.optimizer", default="adam", choices=["adam", "sgd"])
+            cfg.parse_args()  # parses sys.argv using cfg.parser
+        """
+        name = name.lstrip("-")
+        if "." not in name:
+            raise ValueError(f"add_argument name must be 'group.field', got {name!r}")
+        group, _, field = name.partition(".")
+        if choices is not None:
+            extra.setdefault("values", list(choices))
+        if help is not None:
+            extra.setdefault("help", help)
+        self.define(group, field, default=default, type=normalize_type(type), **extra)
+        return self
+
+    @property
+    def parser(self) -> argparse.ArgumentParser:
+        """The internal `argparse.ArgumentParser`, kept in sync with the schema."""
+        return self._parser
+
+    def _sync_parser(self) -> None:
+        parser = argparse.ArgumentParser(description=self._description)
+        add_config_arguments(self, parser)
+        self._parser = parser
+
+    # -- internal learning (used when loading files / defining fields) --------
 
     def _update_group(self, group: str, fields: dict) -> None:
         self._groups.setdefault(group, {})
         self._schema.setdefault(group, {})
         for name, value in fields.items():
             self._set_field(group, name, value)
+        self._sync_parser()
 
     def _set_field(self, group: str, field: str, value: Any) -> None:
         if isinstance(value, dict) and "type" in value:
@@ -76,6 +175,8 @@ class Config:
         else:
             self._schema[group][field] = FieldSpec(name=field, type=infer_type(value), default=value)
             self._groups[group][field] = value
+
+    # -- internal strict updates (used by the fluent group API) ---------------
 
     def _update_group_strict(self, group: str, fields: dict) -> None:
         if group not in self._groups:
@@ -108,7 +209,10 @@ class Config:
                 f"Config.define('{group}', '{field}', ...) or load it from a file first"
             ) from None
 
+    # -- hyperparameter opt settings --------------------------------------
+
     def set_bounds(self, group: str, field: str, min: Any = None, max: Any = None, **extra: Any) -> "Config":
+        """Attach a continuous search range to an already-known field."""
         spec = self._require_field(group, field)
         bounds: dict = {}
         if min is not None:
@@ -117,12 +221,17 @@ class Config:
             bounds["max"] = max
         bounds.update(extra)
         spec.bounds = bounds
+        self._sync_parser()
         return self
 
     def set_values(self, group: str, field: str, values: list) -> "Config":
+        """Attach a discrete/categorical set of candidate values to a field."""
         spec = self._require_field(group, field)
         spec.values = list(values)
+        self._sync_parser()
         return self
+
+    # -- loading ----------------------------------------------------------
 
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
@@ -155,6 +264,87 @@ class Config:
             return cls.from_json(path)
         raise ValueError(f"Unsupported config file extension: {path.suffix}")
 
+    # -- argparse / CLI overrides ---------------------------------------------
+
+    def add_arguments(
+        self,
+        parser: argparse.ArgumentParser,
+        groups: Optional[list[str]] = None,
+    ) -> argparse.ArgumentParser:
+        """Add a typed `--<group>.<field>` option to `parser` for every known field."""
+        return add_config_arguments(self, parser, groups=groups)
+
+    def apply_args(self, args: Union[argparse.Namespace, dict]) -> "Config":
+        """Apply dotted `group.field` overrides from a parsed namespace (or dict)."""
+        return apply_namespace(self, args)
+
+    def parse_args(
+        self,
+        argv: Optional[Sequence[str]] = None,
+        parser: Optional[argparse.ArgumentParser] = None,
+        strict: bool = True,
+    ) -> "Config":
+        """Parse `--<group>.<field>` overrides from the command line onto this config.
+
+        Uses the config's own internal parser (`self.parser`, kept in sync
+        with the schema) by default — no need to call `add_arguments()`
+        first. Pass an external `parser` to merge config options into a
+        parser that also defines script-level flags. With `strict=False`,
+        unrecognized arguments are ignored instead of raising, so the config
+        can share `argv` with another parser.
+        """
+        if parser is None:
+            parser = self._parser
+        else:
+            self.add_arguments(parser)
+        if strict:
+            args = parser.parse_args(argv)
+        else:
+            args, _ = parser.parse_known_args(argv)
+        return self.apply_args(args)
+
+    @classmethod
+    def from_cli(
+        cls,
+        argv: Optional[Sequence[str]] = None,
+        default_config: Optional[PathLike] = None,
+        description: Optional[str] = None,
+    ) -> "Config":
+        """Standard train-script entrypoint: `--config file` plus field overrides.
+
+        Loads the file named by `--config` (falling back to `default_config`),
+        then applies any `--<group>.<field>` overrides from the rest of the
+        command line, e.g.::
+
+            cfg = Config.from_cli()
+            # python train.py --config config.yaml --training.learning_rate 1e-3
+        """
+        bootstrap = argparse.ArgumentParser(add_help=False)
+        bootstrap.add_argument("--config", "-c", default=None)
+        known, _ = bootstrap.parse_known_args(argv)
+        config_path = known.config if known.config is not None else default_config
+
+        if config_path is None:
+            parser = argparse.ArgumentParser(description=description)
+            parser.add_argument("--config", "-c", default=None, help="Path to a YAML/JSON config file")
+            parser.parse_args(argv)  # lets -h/--help print before erroring
+            parser.error("--config is required (no default config file was provided)")
+
+        cfg = cls.from_file(config_path)
+        if description is not None:
+            cfg._description = description
+            cfg._sync_parser()
+
+        config_help = "Path to a YAML/JSON config file"
+        if default_config is not None:
+            config_help += f" (default: {default_config})"
+        cfg.parser.add_argument("--config", "-c", default=None, help=config_help)
+
+        args = cfg.parser.parse_args(argv)
+        return cfg.apply_args(args)
+
+    # -- exporting ----------------------------------------------------------
+
     def to_dict(self) -> dict:
         out: dict = {}
         for group, fields in self._groups.items():
@@ -169,6 +359,13 @@ class Config:
                     out[group][field] = value
         return out
 
+    def clone(self) -> "Config":
+        """Return an independent copy, preserving schema (types, bounds, values)."""
+        cfg = Config.from_dict(self.to_dict())
+        cfg._description = self._description
+        cfg._sync_parser()
+        return cfg
+
     def save(self, path: PathLike) -> None:
         path = Path(path)
         if path.suffix in (".yaml", ".yml"):
@@ -181,12 +378,20 @@ class Config:
         else:
             raise ValueError(f"Unsupported config file extension: {path.suffix}")
 
+    # -- W&B sweep export -----------------------------------------------------
+
     def to_sweep(
         self,
         method: str = "bayes",
         metric: Optional[dict] = None,
         groups: Optional[list[str]] = None,
     ) -> dict:
+        """Build a W&B-compatible sweep config from sweepable fields.
+
+        Fields with `bounds` become continuous ranges (`min`/`max`), fields
+        with `values` become discrete/categorical choices, and any other
+        field is exported as a fixed `value` from the current config.
+        """
         parameters: dict = {}
         for group, fields in self._schema.items():
             if groups is not None and group not in groups:
@@ -217,6 +422,31 @@ class Config:
         sweep_config = self.to_sweep(method=method, metric=metric, groups=groups)
         with open(path, "w") as f:
             yaml.safe_dump(sweep_config, f, sort_keys=False)
+
+    # -- Optuna compatibility (two-way) ----------------------------------
+
+    def to_optuna_distributions(self, groups: Optional[list[str]] = None) -> dict:
+        """Build a dict of `optuna.distributions`, keyed `'group.field'`, from sweepable fields."""
+        return optuna_compat.to_optuna_distributions(self, groups=groups)
+
+    def suggest(self, trial: Any, groups: Optional[list[str]] = None) -> "Config":
+        """Return a new `Config` with sweepable fields set from an `optuna.Trial`'s suggestions.
+
+            def objective(trial):
+                trial_cfg = cfg.suggest(trial)
+                return train(trial_cfg)
+        """
+        return optuna_compat.suggest(self, trial, groups=groups)
+
+    def from_optuna_params(self, params: dict) -> "Config":
+        """Return a new `Config` with dotted `'group.field'` params (e.g. `trial.params`) applied."""
+        return optuna_compat.from_optuna_params(self, params)
+
+    def from_optuna_study(self, study: Any) -> "Config":
+        """Return a new `Config` with the winning params from a completed `optuna.Study` applied."""
+        return optuna_compat.from_optuna_study(self, study)
+
+    # -- misc -----------------------------------------------------------
 
     def __repr__(self) -> str:
         if not self._groups:

@@ -9,7 +9,12 @@ if TYPE_CHECKING:
 
 
 class Group:
-    """Callable namespace bound to a single config group."""
+    """Callable namespace bound to a single config group.
+
+    `config.dataset(batch_size=32)` updates the group and returns the
+    parent `Config` so calls can be chained. `config.dataset.batch_size`
+    reads the current value.
+    """
 
     def __init__(self, name: str, config: "Config"):
         object.__setattr__(self, "_name", name)
