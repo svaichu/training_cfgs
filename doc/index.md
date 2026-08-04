@@ -19,13 +19,17 @@ cfg.set_values("training", "optimizer", ["adam", "sgd"])
 sweep = cfg.to_sweep()
 ```
 
-See the [guide](config.md) for loading, CLI overrides, W&B sweeps, and
-Optuna, or jump straight to the [API reference](api.md).
+See [Config basics](basics.md) for loading, CLI overrides, and exporting;
+[HPO bounds & W&B sweeps](wandb_sweeps.md) for attaching a search space and
+exporting it to W&B; and [Optuna integration](optuna.md) for running the
+search itself — or jump straight to the [API reference](api.md).
 
 ```{toctree}
 :maxdepth: 2
 :hidden:
 
-config
+basics
+wandb_sweeps
+optuna
 api
 ```
