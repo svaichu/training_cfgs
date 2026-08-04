@@ -1,6 +1,7 @@
 import argparse
 
 import pytest
+from optuna.distributions import CategoricalDistribution
 
 from training_cfgs import Config
 
@@ -87,7 +88,7 @@ def test_dict_parses_json_object(tmp_path):
 
 def test_values_become_argparse_choices(tmp_path):
     cfg, _ = make_cfg(tmp_path)
-    cfg.set_values("training", "optimizer", ["adam", "sgd"])
+    cfg.set_distribution("training", "optimizer", CategoricalDistribution(["adam", "sgd"]))
 
     cfg.parse_args(["--training.optimizer", "sgd"])
     assert cfg.training.optimizer == "sgd"
@@ -233,7 +234,7 @@ def test_add_argument_requires_dotted_name():
 def test_add_argument_choices_become_argparse_choices():
     cfg = Config()
     cfg.add_argument("training.optimizer", default="adam", choices=["adam", "sgd"])
-    assert cfg.schema("training", "optimizer").values == ["adam", "sgd"]
+    assert cfg.schema("training", "optimizer").distribution == CategoricalDistribution(["adam", "sgd"])
 
     cfg.parse_args(["--training.optimizer", "sgd"])
     assert cfg.training.optimizer == "sgd"
@@ -255,9 +256,9 @@ def test_parse_args_uses_internal_parser_without_add_arguments(tmp_path):
     assert cfg.training.learning_rate == 2e-3
 
 
-def test_internal_parser_resyncs_after_set_bounds_and_set_values(tmp_path):
+def test_internal_parser_resyncs_after_set_distribution(tmp_path):
     cfg, _ = make_cfg(tmp_path)
-    cfg.set_values("training", "optimizer", ["adam", "sgd"])
+    cfg.set_distribution("training", "optimizer", CategoricalDistribution(["adam", "sgd"]))
 
     with pytest.raises(SystemExit):
         cfg.parse_args(["--training.optimizer", "rmsprop"])

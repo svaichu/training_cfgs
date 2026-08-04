@@ -13,19 +13,23 @@ unknown group or field raises rather than silently creating it::
 
 Loading a YAML/JSON file teaches the config its groups, field names, and
 each field's `type`/`default`. The file doesn't need to carry any
-hyperparameter opt info (`bounds`/`values`) — that's typically attached
-afterward via `set_bounds`/`set_values`, which is what makes a field
-eligible for W&B sweep export::
+hyperparameter opt info — that's typically attached afterward via
+`set_distribution`, which hands the field a native
+`optuna.distributions.BaseDistribution` and is what makes it eligible for
+W&B sweep export::
+
+    from optuna.distributions import CategoricalDistribution, FloatDistribution
 
     cfg = Config.from_file("config.yaml")
-    cfg.set_bounds("training", "learning_rate", min=1e-5, max=1e-2)
-    cfg.set_values("training", "optimizer", ["adam", "sgd"])
+    cfg.set_distribution("training", "learning_rate", FloatDistribution(1e-5, 1e-2))
+    cfg.set_distribution("training", "optimizer", CategoricalDistribution(["adam", "sgd"]))
     cfg.to_sweep_file("sweep.yaml", method="bayes", metric={"name": "loss", "goal": "minimize"})
 
-The same `bounds`/`values` schema also drives two-way Optuna compatibility:
-`to_optuna_distributions()`/`suggest(trial)` build a search space and turn an
-`optuna.Trial` into a `Config`, and `from_optuna_params()`/`from_optuna_study()`
-load the winning config back (see `optuna_compat.py`).
+The same `optuna.distributions` schema also drives two-way Optuna
+compatibility: `to_optuna_distributions()`/`get_current_from_optuna(trial)`
+build a search space and turn an `optuna.Trial` into a `Config`, and
+`from_optuna_params()`/`best_from_optuna()` load the winning config back
+(see `optuna_compat.py`).
 
 Command-line overrides follow the standard training-script pattern: every
 known field is exposed as a dotted, typed `--<group>.<field>` argparse
@@ -48,9 +52,10 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Optional, Sequence, Union
+from typing import Any, Callable, Optional, Sequence, Union
 
 import yaml
+from optuna.distributions import BaseDistribution, CategoricalDistribution
 
 from . import optuna_compat
 from .cli import add_config_arguments, apply_namespace, normalize_type
@@ -61,11 +66,11 @@ PathLike = Union[str, Path]
 
 # Keys that mark a dict value as a field spec (`FieldSpec.from_spec_dict`)
 # rather than a literal `dict`-typed value. `type` alone used to be required,
-# which meant a YAML entry like `{default: 1e-4, bounds: {min: ..., max: ...}}`
+# which meant a YAML entry like `{default: 1e-4, distribution: {...}}`
 # silently became a `dict`-typed field whose default was the whole dict
 # instead of a sweepable float — `type` is optional (inferred from
-# `default`), so `bounds`/`values`/`help` must trigger the same path.
-_SPEC_DICT_KEYS = {"type", "bounds", "values", "help"}
+# `default`), so `distribution`/`help` must trigger the same path.
+_SPEC_DICT_KEYS = {"type", "distribution", "help"}
 
 
 def _is_spec_dict(value: Any) -> bool:
@@ -144,7 +149,7 @@ class Config:
             raise ValueError(f"add_argument name must be 'group.field', got {name!r}")
         group, _, field = name.partition(".")
         if choices is not None:
-            extra.setdefault("values", list(choices))
+            extra.setdefault("distribution", CategoricalDistribution(list(choices)))
         if help is not None:
             extra.setdefault("help", help)
         self.define(group, field, default=default, type=normalize_type(type), **extra)
@@ -213,23 +218,16 @@ class Config:
 
     # -- hyperparameter opt settings --------------------------------------
 
-    def set_bounds(self, group: str, field: str, min: Any = None, max: Any = None, **extra: Any) -> "Config":
-        """Attach a continuous search range to an already-known field."""
-        spec = self._require_field(group, field)
-        bounds: dict = {}
-        if min is not None:
-            bounds["min"] = min
-        if max is not None:
-            bounds["max"] = max
-        bounds.update(extra)
-        spec.bounds = bounds
-        self._sync_parser()
-        return self
+    def set_distribution(self, group: str, field: str, distribution: BaseDistribution) -> "Config":
+        """Attach an `optuna.distributions` object to an already-known field, making it sweepable.
 
-    def set_values(self, group: str, field: str, values: list) -> "Config":
-        """Attach a discrete/categorical set of candidate values to a field."""
+        Accepts any `optuna.distributions.BaseDistribution` directly —
+        `FloatDistribution`, `IntDistribution`, `CategoricalDistribution`,
+        etc. — so the field's search-space schema *is* Optuna's own
+        distribution type, with nothing else to keep in sync.
+        """
         spec = self._require_field(group, field)
-        spec.values = list(values)
+        spec.distribution = distribution
         self._sync_parser()
         return self
 
@@ -361,7 +359,7 @@ class Config:
         return out
 
     def clone(self) -> "Config":
-        """Return an independent copy, preserving schema (types, bounds, values)."""
+        """Return an independent copy, preserving schema (types, distributions)."""
         cfg = Config.from_dict(self.to_dict())
         cfg._description = self._description
         cfg._sync_parser()
@@ -388,8 +386,9 @@ class Config:
     ) -> dict:
         """Build a W&B-compatible sweep config from sweepable fields.
 
-        Fields with `bounds` become continuous ranges (`min`/`max`), fields
-        with `values` become discrete/categorical choices, and any other
+        Fields with a `FloatDistribution`/`IntDistribution` become
+        continuous ranges (`min`/`max`), fields with a
+        `CategoricalDistribution` become discrete choices, and any other
         field is exported as a fixed `value` from the current config.
         """
         parameters: dict = {}
@@ -398,13 +397,8 @@ class Config:
                 continue
             for field, spec in fields.items():
                 key = f"{group}.{field}"
-                if spec.bounds is not None:
-                    parameters[key] = dict(spec.bounds)
-                elif spec.values is not None:
-                    parameters[key] = {"values": list(spec.values)}
-                else:
-                    value = self._groups.get(group, {}).get(field)
-                    parameters[key] = {"value": value}
+                current = self._groups.get(group, {}).get(field)
+                parameters[key] = optuna_compat.to_sweep_params(spec, current)
 
         sweep_config: dict = {"method": method, "parameters": parameters}
         if metric is not None:
@@ -428,22 +422,50 @@ class Config:
         """Build a dict of `optuna.distributions`, keyed `'group.field'`, from sweepable fields."""
         return optuna_compat.to_optuna_distributions(self, groups=groups)
 
-    def suggest(self, trial: Any, groups: Optional[list[str]] = None) -> "Config":
+    def get_current_from_optuna(self, trial: Any, groups: Optional[list[str]] = None) -> "Config":
         """Return a new `Config` with sweepable fields set from an `optuna.Trial`'s suggestions.
 
             def objective(trial):
-                trial_cfg = cfg.suggest(trial)
+                trial_cfg = cfg.get_current_from_optuna(trial)
                 return train(trial_cfg)
         """
-        return optuna_compat.suggest(self, trial, groups=groups)
+        return optuna_compat.get_current_from_optuna(self, trial, groups=groups)
+
+    def single_objective_optimization(
+        self,
+        study: Any,
+        train: Callable[["Config"], float],
+        groups: Optional[list[str]] = None,
+        **optimize_kwargs: Any,
+    ) -> None:
+        """Run a single-objective Optuna study against `train`, in one call.
+
+        Wraps the objective-function boilerplate
+        (`get_current_from_optuna` + `study.optimize`)::
+
+            study = optuna.create_study(direction="minimize")
+            cfg.single_objective_optimization(study, train_fn, n_trials=50)
+
+        is equivalent to::
+
+            def objective(trial):
+                trial_cfg = cfg.get_current_from_optuna(trial)
+                return train_fn(trial_cfg)
+
+            study.optimize(objective, n_trials=50)
+
+        Extra keyword arguments (`n_trials`, `timeout`, `callbacks`, ...) are
+        forwarded straight to `study.optimize`.
+        """
+        optuna_compat.single_objective_optimization(self, study, train, groups=groups, **optimize_kwargs)
 
     def from_optuna_params(self, params: dict) -> "Config":
         """Return a new `Config` with dotted `'group.field'` params (e.g. `trial.params`) applied."""
         return optuna_compat.from_optuna_params(self, params)
 
-    def from_optuna_study(self, study: Any) -> "Config":
+    def best_from_optuna(self, study: Any) -> "Config":
         """Return a new `Config` with the winning params from a completed `optuna.Study` applied."""
-        return optuna_compat.from_optuna_study(self, study)
+        return optuna_compat.best_from_optuna(self, study)
 
     # -- misc -----------------------------------------------------------
 
@@ -460,12 +482,7 @@ class Config:
             for name, value in fields.items():
                 spec = self._schema[group].get(name)
                 if spec is not None and spec.is_sweepable():
-                    extra = ", ".join(
-                        f"{k}={v}"
-                        for k, v in (("bounds", spec.bounds), ("values", spec.values))
-                        if v is not None
-                    )
-                    lines.append(f"    {name}: {value!r} [{extra}]")
+                    lines.append(f"    {name}: {value!r} [{spec.distribution!r}]")
                 else:
                     ftype = spec.type if spec is not None else infer_type(value)
                     lines.append(f"    {name}: {value!r} ({ftype})")

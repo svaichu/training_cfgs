@@ -1,5 +1,6 @@
 import optuna
 import pytest
+from optuna.distributions import CategoricalDistribution, FloatDistribution, IntDistribution
 
 from training_cfgs import Config
 
@@ -14,12 +15,12 @@ def _make_cfg() -> Config:
         optimizer="adam",
         num_epochs=100,
     )
-    cfg.set_bounds("training", "learning_rate", min=1e-5, max=1e-2, log=True)
-    cfg.set_values("training", "optimizer", ["adam", "sgd"])
+    cfg.set_distribution("training", "learning_rate", FloatDistribution(1e-5, 1e-2, log=True))
+    cfg.set_distribution("training", "optimizer", CategoricalDistribution(["adam", "sgd"]))
     return cfg
 
 
-def test_to_optuna_distributions_maps_bounds_and_values():
+def test_to_optuna_distributions_returns_the_attached_distributions():
     cfg = _make_cfg()
     distributions = cfg.to_optuna_distributions()
 
@@ -36,13 +37,16 @@ def test_to_optuna_distributions_maps_bounds_and_values():
     # Fixed (non-sweepable) fields aren't part of the search space.
     assert "training.num_epochs" not in distributions
 
+    # The distribution objects are the schema's own, not a re-derived copy.
+    assert lr_dist is cfg.schema("training", "learning_rate").distribution
 
-def test_suggest_returns_new_config_without_mutating_original():
+
+def test_get_current_from_optuna_returns_new_config_without_mutating_original():
     cfg = _make_cfg()
     study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
     trial = study.ask()
 
-    trial_cfg = cfg.suggest(trial)
+    trial_cfg = cfg.get_current_from_optuna(trial)
 
     assert 1e-5 <= trial_cfg.training.learning_rate <= 1e-2
     assert trial_cfg.training.optimizer in ("adam", "sgd")
@@ -53,11 +57,11 @@ def test_suggest_returns_new_config_without_mutating_original():
     assert cfg.training.optimizer == "adam"
 
 
-def test_suggest_is_usable_inside_an_optuna_study():
+def test_get_current_from_optuna_is_usable_inside_an_optuna_study():
     cfg = _make_cfg()
 
     def objective(trial):
-        trial_cfg = cfg.suggest(trial)
+        trial_cfg = cfg.get_current_from_optuna(trial)
         return (trial_cfg.training.learning_rate - 1e-3) ** 2
 
     study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
@@ -80,21 +84,55 @@ def test_from_optuna_params_applies_dotted_keys_onto_a_clone():
     assert cfg.training.learning_rate == 1e-4
 
 
-def test_from_optuna_study_round_trips_the_winning_config():
+def test_best_from_optuna_round_trips_the_winning_config():
     cfg = _make_cfg()
 
     def objective(trial):
-        trial_cfg = cfg.suggest(trial)
+        trial_cfg = cfg.get_current_from_optuna(trial)
         return (trial_cfg.training.learning_rate - 1e-3) ** 2
 
     study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
     study.optimize(objective, n_trials=10)
 
-    best_cfg = cfg.from_optuna_study(study)
+    best_cfg = cfg.best_from_optuna(study)
 
     assert best_cfg.training.learning_rate == study.best_params["training.learning_rate"]
     assert best_cfg.training.optimizer == study.best_params["training.optimizer"]
     assert best_cfg.training.num_epochs == 100
+
+
+def test_single_objective_optimization_runs_study_without_manual_objective():
+    cfg = _make_cfg()
+
+    def train(trial_cfg):
+        return (trial_cfg.training.learning_rate - 1e-3) ** 2
+
+    study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
+    cfg.single_objective_optimization(study, train, n_trials=10)
+
+    assert len(study.trials) == 10
+    for trial in study.trials:
+        assert set(trial.params.keys()) == {"training.learning_rate", "training.optimizer"}
+
+    best_cfg = cfg.best_from_optuna(study)
+    assert best_cfg.training.learning_rate == study.best_params["training.learning_rate"]
+
+    # Original config untouched.
+    assert cfg.training.learning_rate == 1e-4
+
+
+def test_single_objective_optimization_forwards_extra_kwargs_to_study_optimize():
+    cfg = _make_cfg()
+    calls = []
+
+    def train(trial_cfg):
+        calls.append(trial_cfg.training.learning_rate)
+        return 0.0
+
+    study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
+    cfg.single_objective_optimization(study, train, n_trials=3, n_jobs=1)
+
+    assert len(calls) == 3
 
 
 def test_from_optuna_params_raises_for_non_dotted_key():
@@ -103,17 +141,26 @@ def test_from_optuna_params_raises_for_non_dotted_key():
         cfg.from_optuna_params({"learning_rate": 1e-3})
 
 
-def test_int_field_with_bounds_uses_suggest_int():
+def test_int_field_with_distribution_suggests_an_int():
     cfg = Config()
     cfg.define("training", "batch_size", default=32, type="int")
     cfg.training(batch_size=32)
-    cfg.set_bounds("training", "batch_size", min=8, max=256, step=8)
+    cfg.set_distribution("training", "batch_size", IntDistribution(8, 256, step=8))
 
     distributions = cfg.to_optuna_distributions()
     assert isinstance(distributions["training.batch_size"], optuna.distributions.IntDistribution)
 
     study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
     trial = study.ask()
-    trial_cfg = cfg.suggest(trial)
+    trial_cfg = cfg.get_current_from_optuna(trial)
     assert isinstance(trial_cfg.training.batch_size, int)
     assert 8 <= trial_cfg.training.batch_size <= 256
+
+
+def test_field_without_a_distribution_is_not_part_of_the_search_space():
+    cfg = Config()
+    cfg.define("training", "learning_rate", default=1e-4, type="float")
+    cfg.training(learning_rate=1e-4)
+    # `is_sweepable()` is False without a distribution, so `get_current_from_optuna`/
+    # `to_optuna_distributions` simply skip the field rather than erroring.
+    assert cfg.to_optuna_distributions() == {}

@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from optuna.distributions import CategoricalDistribution, FloatDistribution
 
 from training_cfgs import Config, FieldSpec
 
@@ -23,7 +24,7 @@ def test_fluent_builder_chains_and_learns_types():
     assert cfg.schema("training", "shuffle").type == "bool"
 
 
-def test_from_yaml_learns_groups_fields_and_bounds(tmp_path):
+def test_from_yaml_learns_groups_fields_and_distribution(tmp_path):
     yaml_path = tmp_path / "config.yaml"
     yaml_path.write_text(
         """
@@ -33,12 +34,14 @@ dataset:
 training:
   learning_rate:
     type: float
-    bounds:
-      min: 1.0e-5
-      max: 1.0e-2
+    distribution:
+      name: FloatDistribution
+      attributes: {low: 1.0e-5, high: 1.0e-2}
   optimizer:
     type: str
-    values: [adam, sgd]
+    distribution:
+      name: CategoricalDistribution
+      attributes: {choices: [adam, sgd]}
 """
     )
     cfg = Config.from_yaml(yaml_path)
@@ -48,15 +51,15 @@ training:
 
     lr_spec = cfg.schema("training", "learning_rate")
     assert lr_spec.type == "float"
-    assert lr_spec.bounds == {"min": 1e-5, "max": 1e-2}
+    assert lr_spec.distribution == FloatDistribution(1e-5, 1e-2)
 
     opt_spec = cfg.schema("training", "optimizer")
-    assert opt_spec.values == ["adam", "sgd"]
+    assert opt_spec.distribution == CategoricalDistribution(["adam", "sgd"])
 
 
-def test_from_yaml_learns_bounds_and_values_without_explicit_type(tmp_path):
+def test_from_yaml_learns_distribution_without_explicit_type(tmp_path):
     # `type` is optional in a spec dict (inferred from `default`); a field
-    # entry that only carries `default` + `bounds`/`values` must still be
+    # entry that only carries `default` + `distribution` must still be
     # recognized as a spec dict, not swallowed as a literal dict-typed value.
     yaml_path = tmp_path / "config.yaml"
     yaml_path.write_text(
@@ -64,12 +67,14 @@ def test_from_yaml_learns_bounds_and_values_without_explicit_type(tmp_path):
 training:
   learning_rate:
     default: 1.0e-4
-    bounds:
-      min: 1.0e-5
-      max: 1.0e-2
+    distribution:
+      name: FloatDistribution
+      attributes: {low: 1.0e-5, high: 1.0e-2}
   optimizer:
     default: adam
-    values: [adam, sgd]
+    distribution:
+      name: CategoricalDistribution
+      attributes: {choices: [adam, sgd]}
 """
     )
     cfg = Config.from_yaml(yaml_path)
@@ -77,12 +82,12 @@ training:
     lr_spec = cfg.schema("training", "learning_rate")
     assert lr_spec.type == "float"
     assert lr_spec.default == 1e-4
-    assert lr_spec.bounds == {"min": 1e-5, "max": 1e-2}
+    assert lr_spec.distribution == FloatDistribution(1e-5, 1e-2)
     assert cfg.training.learning_rate == 1e-4
 
     opt_spec = cfg.schema("training", "optimizer")
     assert opt_spec.type == "str"
-    assert opt_spec.values == ["adam", "sgd"]
+    assert opt_spec.distribution == CategoricalDistribution(["adam", "sgd"])
     assert cfg.training.optimizer == "adam"
 
 
@@ -99,24 +104,22 @@ def test_from_json_roundtrip(tmp_path):
 def test_save_and_reload_round_trips(tmp_path):
     cfg = Config()
     cfg.define("training", "learning_rate", default=1e-4, type="float")
-    cfg.training(learning_rate={"type": "float", "bounds": {"min": 1e-5, "max": 1e-2}})
+    cfg.set_distribution("training", "learning_rate", FloatDistribution(1e-5, 1e-2))
     out_path = tmp_path / "out.yaml"
     cfg.save(out_path)
 
     reloaded = Config.from_yaml(out_path)
-    assert reloaded.schema("training", "learning_rate").bounds == {"min": 1e-5, "max": 1e-2}
+    assert reloaded.schema("training", "learning_rate").distribution == FloatDistribution(1e-5, 1e-2)
 
 
-def test_to_sweep_maps_bounds_values_and_fixed_fields():
+def test_to_sweep_maps_distributions_and_fixed_fields():
     cfg = Config()
     cfg.define("training", "learning_rate", default=1e-4, type="float")
     cfg.define("training", "optimizer", default="adam", type="str")
     cfg.define("training", "num_epochs", default=100, type="int")
-    cfg.training(
-        learning_rate={"type": "float", "bounds": {"min": 1e-5, "max": 1e-2}},
-        optimizer={"type": "str", "values": ["adam", "sgd"]},
-        num_epochs=100,
-    )
+    cfg.training(learning_rate=1e-4, optimizer="adam", num_epochs=100)
+    cfg.set_distribution("training", "learning_rate", FloatDistribution(1e-5, 1e-2))
+    cfg.set_distribution("training", "optimizer", CategoricalDistribution(["adam", "sgd"]))
 
     sweep = cfg.to_sweep(method="bayes", metric={"name": "loss", "goal": "minimize"})
 
@@ -130,7 +133,8 @@ def test_to_sweep_maps_bounds_values_and_fixed_fields():
 def test_to_sweep_file_writes_yaml(tmp_path):
     cfg = Config()
     cfg.define("training", "learning_rate", default=1e-4, type="float")
-    cfg.training(learning_rate={"type": "float", "bounds": {"min": 1e-5, "max": 1e-2}})
+    cfg.training(learning_rate=1e-4)
+    cfg.set_distribution("training", "learning_rate", FloatDistribution(1e-5, 1e-2))
     sweep_path = tmp_path / "sweep.yaml"
     cfg.to_sweep_file(sweep_path)
 
@@ -164,12 +168,11 @@ training:
     lr_spec = cfg.schema("training", "learning_rate")
     assert lr_spec.type == "float"
     assert lr_spec.default == 1e-4
-    assert lr_spec.bounds is None
-    assert lr_spec.values is None
+    assert lr_spec.distribution is None
     assert not lr_spec.is_sweepable()
 
 
-def test_set_bounds_and_set_values_after_loading_plain_yaml(tmp_path):
+def test_set_distribution_after_loading_plain_yaml(tmp_path):
     yaml_path = tmp_path / "config.yaml"
     yaml_path.write_text(
         """
@@ -179,40 +182,40 @@ training:
 """
     )
     cfg = Config.from_yaml(yaml_path)
-    cfg.set_bounds("training", "learning_rate", min=1e-5, max=1e-2)
-    cfg.set_values("training", "optimizer", ["adam", "sgd", "adamw"])
+    cfg.set_distribution("training", "learning_rate", FloatDistribution(1e-5, 1e-2))
+    cfg.set_distribution("training", "optimizer", CategoricalDistribution(["adam", "sgd", "adamw"]))
 
     lr_spec = cfg.schema("training", "learning_rate")
-    assert lr_spec.bounds == {"min": 1e-5, "max": 1e-2}
+    assert lr_spec.distribution == FloatDistribution(1e-5, 1e-2)
     assert lr_spec.default == 1e-4  # default from the file is preserved
 
     opt_spec = cfg.schema("training", "optimizer")
-    assert opt_spec.values == ["adam", "sgd", "adamw"]
+    assert opt_spec.distribution == CategoricalDistribution(["adam", "sgd", "adamw"])
 
     sweep = cfg.to_sweep()
     assert sweep["parameters"]["training.learning_rate"] == {"min": 1e-5, "max": 1e-2}
     assert sweep["parameters"]["training.optimizer"] == {"values": ["adam", "sgd", "adamw"]}
 
 
-def test_group_level_set_bounds_and_set_values(tmp_path):
+def test_group_level_set_distribution(tmp_path):
     cfg = Config()
     cfg.define("training", "learning_rate", default=1e-4, type="float")
     cfg.define("training", "optimizer", default="adam", type="str")
     cfg.training(learning_rate=1e-4, optimizer="adam")
 
-    cfg.training.set_bounds("learning_rate", min=1e-5, max=1e-2)
-    cfg.training.set_values("optimizer", ["adam", "sgd"])
+    cfg.training.set_distribution("learning_rate", FloatDistribution(1e-5, 1e-2))
+    cfg.training.set_distribution("optimizer", CategoricalDistribution(["adam", "sgd"]))
 
-    assert cfg.schema("training", "learning_rate").bounds == {"min": 1e-5, "max": 1e-2}
-    assert cfg.schema("training", "optimizer").values == ["adam", "sgd"]
+    assert cfg.schema("training", "learning_rate").distribution == FloatDistribution(1e-5, 1e-2)
+    assert cfg.schema("training", "optimizer").distribution == CategoricalDistribution(["adam", "sgd"])
 
 
-def test_set_bounds_raises_for_unknown_field():
+def test_set_distribution_raises_for_unknown_field():
     cfg = Config()
     cfg.define("training", "learning_rate", default=1e-4, type="float")
     cfg.training(learning_rate=1e-4)
     with pytest.raises(KeyError):
-        cfg.set_bounds("training", "missing_field", min=0, max=1)
+        cfg.set_distribution("training", "missing_field", FloatDistribution(0, 1))
 
 
 def test_calling_unknown_group_raises_and_names_it():
@@ -248,7 +251,7 @@ def test_save_preserves_current_value_for_sweepable_fields(tmp_path):
     cfg = Config()
     cfg.define("training", "learning_rate", default=1e-4, type="float")
     cfg.training(learning_rate=5e-4)
-    cfg.set_bounds("training", "learning_rate", min=1e-5, max=1e-2)
+    cfg.set_distribution("training", "learning_rate", FloatDistribution(1e-5, 1e-2))
 
     assert cfg.to_dict()["training"]["learning_rate"]["default"] == 5e-4
 

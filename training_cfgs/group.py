@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from optuna.distributions import BaseDistribution
+
     from .config import Config
 
 
@@ -52,8 +54,5 @@ class Group:
     def to_dict(self) -> dict:
         return dict(self._config._groups.get(self._name, {}))
 
-    def set_bounds(self, field: str, min: Any = None, max: Any = None, **extra: Any) -> "Config":
-        return self._config.set_bounds(self._name, field, min=min, max=max, **extra)
-
-    def set_values(self, field: str, values: list) -> "Config":
-        return self._config.set_values(self._name, field, values)
+    def set_distribution(self, field: str, distribution: "BaseDistribution") -> "Config":
+        return self._config.set_distribution(self._name, field, distribution)
