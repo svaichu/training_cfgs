@@ -18,7 +18,7 @@ Building a search space and running a study::
 
 Loading the winning config back onto the schema::
 
-    best_cfg = cfg.from_optuna_study(study)           # study.best_params
+    best_cfg = cfg.best_from_optuna(study)             # study.best_params
     best_cfg = cfg.from_optuna_params(trial.params)    # any dotted-key params dict
 """
 
@@ -135,6 +135,6 @@ def from_optuna_params(config: "Config", params: dict) -> "Config":
     return cfg
 
 
-def from_optuna_study(config: "Config", study: Any) -> "Config":
+def best_from_optuna(config: "Config", study: Any) -> "Config":
     """Return a new `Config` with the winning params from a completed `optuna.Study` applied."""
     return from_optuna_params(config, study.best_params)

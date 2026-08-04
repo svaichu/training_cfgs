@@ -84,7 +84,7 @@ def test_from_optuna_params_applies_dotted_keys_onto_a_clone():
     assert cfg.training.learning_rate == 1e-4
 
 
-def test_from_optuna_study_round_trips_the_winning_config():
+def test_best_from_optuna_round_trips_the_winning_config():
     cfg = _make_cfg()
 
     def objective(trial):
@@ -94,7 +94,7 @@ def test_from_optuna_study_round_trips_the_winning_config():
     study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
     study.optimize(objective, n_trials=10)
 
-    best_cfg = cfg.from_optuna_study(study)
+    best_cfg = cfg.best_from_optuna(study)
 
     assert best_cfg.training.learning_rate == study.best_params["training.learning_rate"]
     assert best_cfg.training.optimizer == study.best_params["training.optimizer"]
@@ -114,7 +114,7 @@ def test_single_objective_optimization_runs_study_without_manual_objective():
     for trial in study.trials:
         assert set(trial.params.keys()) == {"training.learning_rate", "training.optimizer"}
 
-    best_cfg = cfg.from_optuna_study(study)
+    best_cfg = cfg.best_from_optuna(study)
     assert best_cfg.training.learning_rate == study.best_params["training.learning_rate"]
 
     # Original config untouched.

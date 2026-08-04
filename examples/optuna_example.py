@@ -48,7 +48,7 @@ def main() -> None:
     print("Best value:", study.best_value)
     print("Best params:", study.best_params)
 
-    best_cfg = cfg.from_optuna_study(study)
+    best_cfg = cfg.best_from_optuna(study)
     print(best_cfg)
     best_cfg.save("best_config.yaml")
 

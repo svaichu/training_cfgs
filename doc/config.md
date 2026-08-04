@@ -415,7 +415,7 @@ reach for the explicit form instead when the objective needs to do more than
 call `train(trial_cfg)` (e.g. `trial.report(...)`/pruning mid-training).
 
 **3. The winning trial's params → a `Config` (loading the result back).**
-`from_optuna_study(study)` reads `study.best_params` (a plain
+`best_from_optuna(study)` reads `study.best_params` (a plain
 `{"group.field": value, ...}` dict, Optuna's own trial-recording format) and
 applies it onto a clone of `cfg`, exactly like `apply_args` does for
 CLI/file overrides. `from_optuna_params(params)` is the same operation
@@ -423,14 +423,14 @@ against *any* dotted-key dict — `study.best_params`, `trial.params` from a
 specific completed trial, or a dict you built by hand:
 
 ```python
-best_cfg = cfg.from_optuna_study(study)          # study.best_params
+best_cfg = cfg.best_from_optuna(study)           # study.best_params
 best_cfg = cfg.from_optuna_params(trial.params)  # one specific trial's params
 ```
 
 Both return a clone with the given `"group.field"` params applied on top of
 the original config's other values, so fixed (non-sweepable) fields like
 `num_epochs` are carried over unchanged — the round trip is
-`cfg.set_distribution` → `study.optimize` → `cfg.from_optuna_study`, ending
+`cfg.set_distribution` → `study.optimize` → `cfg.best_from_optuna`, ending
 with a `Config` of the same shape you started with.
 
 ### Validation and edge cases
@@ -468,7 +468,7 @@ with a `Config` of the same shape you started with.
 | `get_current_from_optuna(trial, groups=None)` | New `Config` with sweepable fields set from an `optuna.Trial`'s suggestions |
 | `single_objective_optimization(study, train, groups=None, **optimize_kwargs)` | Run `study.optimize` against `train`, building each trial's `Config` automatically |
 | `from_optuna_params(params)` | New `Config` with dotted `"group.field"` params (e.g. `trial.params`) applied |
-| `from_optuna_study(study)` | New `Config` with a completed `optuna.Study`'s `best_params` applied |
+| `best_from_optuna(study)` | New `Config` with a completed `optuna.Study`'s `best_params` applied |
 
 `config.<group>(**fields)` (e.g. `config.dataset(...)`) updates a group and
 returns the parent `Config` for chaining; `config.<group>.<field>` reads the

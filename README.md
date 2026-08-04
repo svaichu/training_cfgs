@@ -34,7 +34,7 @@ cfg = Config.from_cli(default_config="config.yaml")
 # Optuna search, same schema as the sweep export above
 study = optuna.create_study(direction="minimize")
 cfg.single_objective_optimization(study, train, n_trials=50)
-best_cfg = cfg.from_optuna_study(study)
+best_cfg = cfg.best_from_optuna(study)
 ```
 
 See [`doc/config.md`](doc/config.md) for the full guide (loading, CLI

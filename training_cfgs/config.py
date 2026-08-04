@@ -28,7 +28,7 @@ W&B sweep export::
 The same `optuna.distributions` schema also drives two-way Optuna
 compatibility: `to_optuna_distributions()`/`get_current_from_optuna(trial)`
 build a search space and turn an `optuna.Trial` into a `Config`, and
-`from_optuna_params()`/`from_optuna_study()` load the winning config back
+`from_optuna_params()`/`best_from_optuna()` load the winning config back
 (see `optuna_compat.py`).
 
 Command-line overrides follow the standard training-script pattern: every
@@ -463,9 +463,9 @@ class Config:
         """Return a new `Config` with dotted `'group.field'` params (e.g. `trial.params`) applied."""
         return optuna_compat.from_optuna_params(self, params)
 
-    def from_optuna_study(self, study: Any) -> "Config":
+    def best_from_optuna(self, study: Any) -> "Config":
         """Return a new `Config` with the winning params from a completed `optuna.Study` applied."""
-        return optuna_compat.from_optuna_study(self, study)
+        return optuna_compat.best_from_optuna(self, study)
 
     # -- misc -----------------------------------------------------------
 
