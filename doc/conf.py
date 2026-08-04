@@ -26,6 +26,8 @@ source_suffix = {
     ".md": "markdown",
 }
 
+myst_heading_anchors = 3
+
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"
 autodoc_default_options = {

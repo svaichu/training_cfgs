@@ -37,7 +37,9 @@ cfg.single_objective_optimization(study, train, n_trials=50)
 best_cfg = cfg.best_from_optuna(study)
 ```
 
-See [`doc/config.md`](doc/config.md) (or the hosted [Read the Docs
+See the docs (or the hosted [Read the Docs
 site](https://training-cfgs.readthedocs.io/), once connected) for the full
-guide (loading, CLI overrides, W&B sweeps, Optuna) and
+guide: [`doc/basics.md`](doc/basics.md) (loading, CLI overrides, exporting),
+[`doc/wandb_sweeps.md`](doc/wandb_sweeps.md) (HPO bounds, W&B sweep export),
+[`doc/optuna.md`](doc/optuna.md) (Optuna integration) — and
 [`examples/`](examples/) for runnable scripts.
