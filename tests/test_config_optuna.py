@@ -101,6 +101,40 @@ def test_from_optuna_study_round_trips_the_winning_config():
     assert best_cfg.training.num_epochs == 100
 
 
+def test_single_objective_optimization_runs_study_without_manual_objective():
+    cfg = _make_cfg()
+
+    def train(trial_cfg):
+        return (trial_cfg.training.learning_rate - 1e-3) ** 2
+
+    study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
+    cfg.single_objective_optimization(study, train, n_trials=10)
+
+    assert len(study.trials) == 10
+    for trial in study.trials:
+        assert set(trial.params.keys()) == {"training.learning_rate", "training.optimizer"}
+
+    best_cfg = cfg.from_optuna_study(study)
+    assert best_cfg.training.learning_rate == study.best_params["training.learning_rate"]
+
+    # Original config untouched.
+    assert cfg.training.learning_rate == 1e-4
+
+
+def test_single_objective_optimization_forwards_extra_kwargs_to_study_optimize():
+    cfg = _make_cfg()
+    calls = []
+
+    def train(trial_cfg):
+        calls.append(trial_cfg.training.learning_rate)
+        return 0.0
+
+    study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
+    cfg.single_objective_optimization(study, train, n_trials=3, n_jobs=1)
+
+    assert len(calls) == 3
+
+
 def test_from_optuna_params_raises_for_non_dotted_key():
     cfg = _make_cfg()
     with pytest.raises(ValueError, match="group.field"):

@@ -52,7 +52,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Optional, Sequence, Union
+from typing import Any, Callable, Optional, Sequence, Union
 
 import yaml
 from optuna.distributions import BaseDistribution, CategoricalDistribution
@@ -430,6 +430,34 @@ class Config:
                 return train(trial_cfg)
         """
         return optuna_compat.get_current_from_optuna(self, trial, groups=groups)
+
+    def single_objective_optimization(
+        self,
+        study: Any,
+        train: Callable[["Config"], float],
+        groups: Optional[list[str]] = None,
+        **optimize_kwargs: Any,
+    ) -> None:
+        """Run a single-objective Optuna study against `train`, in one call.
+
+        Wraps the objective-function boilerplate
+        (`get_current_from_optuna` + `study.optimize`)::
+
+            study = optuna.create_study(direction="minimize")
+            cfg.single_objective_optimization(study, train_fn, n_trials=50)
+
+        is equivalent to::
+
+            def objective(trial):
+                trial_cfg = cfg.get_current_from_optuna(trial)
+                return train_fn(trial_cfg)
+
+            study.optimize(objective, n_trials=50)
+
+        Extra keyword arguments (`n_trials`, `timeout`, `callbacks`, ...) are
+        forwarded straight to `study.optimize`.
+        """
+        optuna_compat.single_objective_optimization(self, study, train, groups=groups, **optimize_kwargs)
 
     def from_optuna_params(self, params: dict) -> "Config":
         """Return a new `Config` with dotted `'group.field'` params (e.g. `trial.params`) applied."""

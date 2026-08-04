@@ -24,7 +24,7 @@ Loading the winning config back onto the schema::
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from optuna.distributions import CategoricalDistribution
 
@@ -92,6 +92,36 @@ def get_current_from_optuna(config: "Config", trial: Any, groups: Optional[list[
                 # without re-deriving low/high/choices by hand.
                 cfg._set_field_strict(group, field, trial._suggest(key, spec.distribution))
     return cfg
+
+
+def single_objective_optimization(
+    config: "Config",
+    study: Any,
+    train: Callable[["Config"], float],
+    groups: Optional[list[str]] = None,
+    **optimize_kwargs: Any,
+) -> None:
+    """Run a single-objective `study.optimize` against `train`, wiring up the objective for you.
+
+    `train` is any callable that takes a per-trial `Config` (built via
+    `get_current_from_optuna`) and returns the single float `study.optimize`
+    expects. Equivalent to writing the objective closure by hand::
+
+        def objective(trial):
+            trial_cfg = cfg.get_current_from_optuna(trial)
+            return train(trial_cfg)
+
+        study.optimize(objective, n_trials=50)
+
+    Extra keyword arguments (`n_trials`, `timeout`, `callbacks`, ...) are
+    forwarded straight to `study.optimize`.
+    """
+
+    def objective(trial: Any) -> float:
+        trial_cfg = get_current_from_optuna(config, trial, groups=groups)
+        return train(trial_cfg)
+
+    study.optimize(objective, **optimize_kwargs)
 
 
 def from_optuna_params(config: "Config", params: dict) -> "Config":

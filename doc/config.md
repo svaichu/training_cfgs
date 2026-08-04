@@ -339,7 +339,7 @@ sweep export and two-way [Optuna](https://optuna.org/) compatibility from
 one native representation. `optuna` is a core dependency, installed
 automatically with the package. All of the logic below lives in
 [`training_cfgs/optuna_compat.py`](../training_cfgs/optuna_compat.py) and is
-exposed as four `Config` methods; runnable end-to-end example:
+exposed as `Config` methods; runnable end-to-end example:
 [`examples/optuna_example.py`](../examples/optuna_example.py).
 
 ### The interface, precisely
@@ -394,6 +394,26 @@ Because `get_current_from_optuna()` clones (`Config.clone()`) instead of mutatin
 place, the same `cfg` object is safe to reuse across every trial in the
 study — nothing needs to be reset between calls.
 
+**Or skip the objective closure entirely: `single_objective_optimization`.**
+`single_objective_optimization(study, train, groups=None, **optimize_kwargs)`
+wraps the `objective`/`study.optimize` boilerplate above into one call —
+`train` is any callable that takes a per-trial `Config` and returns the
+float `study.optimize` expects; everything else (`n_trials`, `timeout`,
+`callbacks`, ...) is forwarded straight through:
+
+```python
+def train(trial_cfg: Config) -> float:
+    ...
+
+study = optuna.create_study(direction="minimize")
+cfg.single_objective_optimization(study, train, n_trials=50)
+```
+
+This is exactly the two lines above (`def objective(trial): ...` +
+`study.optimize(objective, n_trials=50)`) with the closure written for you —
+reach for the explicit form instead when the objective needs to do more than
+call `train(trial_cfg)` (e.g. `trial.report(...)`/pruning mid-training).
+
 **3. The winning trial's params → a `Config` (loading the result back).**
 `from_optuna_study(study)` reads `study.best_params` (a plain
 `{"group.field": value, ...}` dict, Optuna's own trial-recording format) and
@@ -421,7 +441,7 @@ with a `Config` of the same shape you started with.
 - `from_optuna_params` raises `ValueError` for a key without a `.`
   (`{"learning_rate": ...}` instead of `{"training.learning_rate": ...}`),
   matching `apply_args`'s strictness for CLI/`wandb.config` overrides.
-- `groups=[...]` on any of the four methods restricts them to specific
+- `groups=[...]` on any of these methods restricts them to specific
   top-level groups, same as `to_sweep(groups=...)`.
 
 ## API summary
@@ -446,6 +466,7 @@ with a `Config` of the same shape you started with.
 | `to_sweep(method="bayes", metric=None, groups=None)` / `to_sweep_file(path, ...)` | Build/write a W&B-compatible sweep config |
 | `to_optuna_distributions(groups=None)` | Build a dict of `optuna.distributions`, keyed `"group.field"` |
 | `get_current_from_optuna(trial, groups=None)` | New `Config` with sweepable fields set from an `optuna.Trial`'s suggestions |
+| `single_objective_optimization(study, train, groups=None, **optimize_kwargs)` | Run `study.optimize` against `train`, building each trial's `Config` automatically |
 | `from_optuna_params(params)` | New `Config` with dotted `"group.field"` params (e.g. `trial.params`) applied |
 | `from_optuna_study(study)` | New `Config` with a completed `optuna.Study`'s `best_params` applied |
 
