@@ -1,0 +1,148 @@
+# =============================================================================
+# training_cfgs template config
+# =============================================================================
+#
+# Copy this file and delete whatever you don't need. It documents every field
+# shape `Config.from_yaml()` understands, including every `optuna.distributions`
+# type you can attach to make a field sweepable (W&B sweeps + Optuna, see
+# doc/wandb_sweeps.md and doc/optuna.md).
+#
+# Top-level layout: a config is a mapping of group name -> field mapping.
+#   <group>:
+#     <field>: <plain value>            # shorthand for a fixed, non-sweepable field
+#     <field>:                          # full spec dict form
+#       type: <str|int|float|bool|list|dict>   # optional -- inferred from `default`
+#                                               # (or from `distribution` if `default`
+#                                               # is omitted) when not given
+#       default: <value>                # required unless `distribution` is given
+#                                        # (then it defaults to the distribution's
+#                                        # low bound / first choice)
+#       help: <string>                  # optional, free-text description
+#       distribution: {...}             # optional, see the distribution catalog below;
+#                                        # presence of `distribution` is what makes a
+#                                        # field sweepable (FieldSpec.is_sweepable())
+#
+# Group/field names become dotted keys elsewhere in the library, e.g.
+# `--dataset.batch_size` on the CLI, `"training.learning_rate"` in
+# `cfg.to_optuna_distributions()`, and `study.best_params`.
+# =============================================================================
+
+dataset:
+  # Plain scalar -- shorthand for {type: str, default: oxe}. Fixed, not sweepable.
+  name: oxe
+
+  # Plain scalar -- type/default inferred as {type: bool, default: true}.
+  shuffle: true
+
+  # Full spec dict with no distribution: still just a fixed value, but with
+  # explicit type/help documentation.
+  num_workers:
+    type: int
+    default: 4
+    help: "DataLoader worker processes"
+
+  # ---------------------------------------------------------------------------
+  # optuna.distributions.IntDistribution -- integer search space.
+  # Constructor: IntDistribution(low, high, log=False, step=1)
+  #   low / high : inclusive integer bounds
+  #   step       : grid spacing between candidate values (default 1);
+  #                mutually exclusive with log=true
+  #   log        : sample on a log scale instead of linear (step must stay 1/unset)
+  # ---------------------------------------------------------------------------
+
+  # Uniform integer, evenly spaced by `step` (batch sizes: 8, 16, 24, ..., 128).
+  batch_size:
+    type: int
+    default: 32
+    distribution:
+      name: IntDistribution
+      attributes: {low: 8, high: 128, step: 8}
+
+  # Log-uniform integer (equivalent to the deprecated IntLogUniformDistribution).
+  # No `step` when `log: true`.
+  hidden_dim:
+    type: int
+    default: 256
+    distribution:
+      name: IntDistribution
+      attributes: {low: 64, high: 2048, log: true}
+
+training:
+  # ---------------------------------------------------------------------------
+  # optuna.distributions.FloatDistribution -- continuous search space.
+  # Constructor: FloatDistribution(low, high, log=False, step=None)
+  #   low / high : inclusive float bounds
+  #   log        : sample on a log scale (equivalent to the deprecated
+  #                LogUniformDistribution); mutually exclusive with `step`
+  #   step       : discretize the range to a fixed grid spacing (equivalent to
+  #                the deprecated DiscreteUniformDistribution); omit/null for
+  #                a continuous range
+  # ---------------------------------------------------------------------------
+
+  # Log-uniform float -- the standard shape for learning rates.
+  learning_rate:
+    type: float
+    default: 1.0e-4
+    distribution:
+      name: FloatDistribution
+      attributes: {low: 1.0e-5, high: 1.0e-2, log: true}
+
+  # Plain uniform float (log defaults to false, step defaults to null).
+  dropout:
+    type: float
+    default: 0.1
+    distribution:
+      name: FloatDistribution
+      attributes: {low: 0.0, high: 0.5}
+
+  # Discrete/stepped float -- candidates land on a fixed grid (0.80, 0.85, ..., 0.99).
+  weight_decay:
+    type: float
+    default: 0.9
+    distribution:
+      name: FloatDistribution
+      attributes: {low: 0.80, high: 0.99, step: 0.01}
+
+  # ---------------------------------------------------------------------------
+  # optuna.distributions.CategoricalDistribution -- discrete choice from a fixed
+  # set of (JSON-serializable, typically str/int/float/bool/None) values.
+  # Constructor: CategoricalDistribution(choices)
+  #   choices : non-empty sequence of candidate values; the field's own `type`
+  #             is inferred from the first choice if `default`/`type` are omitted
+  # ---------------------------------------------------------------------------
+  optimizer:
+    default: adam
+    distribution:
+      name: CategoricalDistribution
+      attributes: {choices: [adam, sgd, adamw]}
+
+  # Categorical over non-string values works the same way.
+  lr_schedule_steps:
+    default: 3
+    distribution:
+      name: CategoricalDistribution
+      attributes: {choices: [1, 2, 3, 5, 8]}
+
+  # Plain fixed value -- not sweepable, carried through unchanged by
+  # to_optuna_distributions() / get_current_from_optuna().
+  num_epochs: 100
+
+  # list/dict-typed fields are supported as plain (non-sweepable) values too --
+  # Optuna's distributions don't cover structured search spaces natively.
+  callbacks: [checkpoint, early_stopping]
+
+# -----------------------------------------------------------------------------
+# Notes
+# -----------------------------------------------------------------------------
+# - Deprecated Optuna distribution aliases (UniformDistribution,
+#   LogUniformDistribution, IntUniformDistribution, IntLogUniformDistribution,
+#   DiscreteUniformDistribution) are still accepted by `name:` for backward
+#   compatibility, but prefer FloatDistribution/IntDistribution with the
+#   log/step attributes shown above -- that's what Optuna itself recommends.
+# - `distribution` mirrors optuna's own `distribution_to_json`/
+#   `json_to_distribution` wire format exactly: {name: <class name>,
+#   attributes: {...constructor kwargs...}}.
+# - A field with no `distribution` is simply a fixed value: it's skipped by
+#   `to_optuna_distributions`/`get_current_from_optuna` and exported as
+#   {"value": ...} (not {"min"/"max"/"values": ...}) in a W&B sweep file.
+# =============================================================================
