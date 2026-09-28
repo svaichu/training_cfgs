@@ -240,6 +240,33 @@ cfg.save("out.yaml")      # or "out.json"
 cfg.clone()                # independent copy, same schema
 ```
 
+### Bridging to another program's CLI
+
+`from_cli`/`parse_args` expose *this* config's own dotted `--<group>.<field>`
+schema. A different, common need is a thin launcher: load a `Config`, then
+re-invoke someone else's trainer as a subprocess, whose CLI (argparse/tyro/
+click) almost never uses that dotted schema — it wants a flat, kebab-case
+argv instead. `flatten()` (aliased `to_argv()`) renders exactly that from
+the current values:
+
+```python
+argv = cfg.flatten()
+# ['--base-model-path', 'nvidia/GR00T-N1.7-3B',
+#  '--no-tune-llm', '--tune-projector',
+#  '--global-batch-size', '32', '--learning-rate', '0.0001', ...]
+
+subprocess.run([sys.executable, "launch_finetune.py", *argv], check=True)
+```
+
+Fields whose value is `None` are skipped. Options:
+
+- `groups=[...]` — flatten only a subset of groups (mirrors `to_dict`/`to_sweep`).
+- `prefix_groups=True` — emit `--<group>-<field>` instead of the bare `--<field>` flag.
+- `bool_style="flag"` (default) emits `--flag`/`--no-flag` (the tyro/
+  argparse `BooleanOptionalAction` convention); `bool_style="true_false"`
+  emits `--flag true`/`--flag false`, for downstream CLIs that expect an
+  explicit value.
+
 ## API summary
 
 | Member | Description |
@@ -256,6 +283,7 @@ cfg.clone()                # independent copy, same schema
 | `apply_args(args)` | Apply dotted overrides from a parsed namespace or dict |
 | `parse_args(argv=None, parser=None, strict=True)` | Parse against `cfg.parser` (or a given `parser`) and apply overrides |
 | `to_dict()` | Export the current config as a nested dict |
+| `flatten(groups=None, prefix_groups=False, bool_style="flag")` / `to_argv(...)` | Render current values as a flat, kebab-case CLI argv for another program |
 | `clone()` | Independent copy, preserving schema |
 | `save(path)` | Write to `.yaml`/`.yml`/`.json` |
 

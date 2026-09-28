@@ -376,6 +376,61 @@ class Config:
         else:
             raise ValueError(f"Unsupported config file extension: {path.suffix}")
 
+    def flatten(
+        self,
+        groups: Optional[list[str]] = None,
+        prefix_groups: bool = False,
+        bool_style: str = "flag",
+    ) -> list[str]:
+        """Render the current values as a flat, kebab-case CLI argv for another program.
+
+        Unlike `parse_args`'s dotted `--<group>.<field>` schema (meant for
+        overriding *this* config), `flatten()` targets a third-party
+        trainer's own CLI, which almost never knows about our grouping::
+
+            argv = cfg.flatten()
+            # ['--base-model-path', 'nvidia/GR00T-N1.7-3B',
+            #  '--no-tune-llm', '--global-batch-size', '32', ...]
+            subprocess.run([sys.executable, "launch_finetune.py", *argv], check=True)
+
+        Fields whose value is `None` are skipped. `prefix_groups=True`
+        emits `--<group>-<field>` instead of the bare `--<field>` flag.
+        `bool_style` controls how `bool` fields are rendered: `"flag"`
+        (default) emits `--flag`/`--no-flag` (the tyro/argparse
+        `BooleanOptionalAction` convention); `"true_false"` emits
+        `--flag true`/`--flag false`.
+        """
+        if bool_style not in ("flag", "true_false"):
+            raise ValueError(f"bool_style must be 'flag' or 'true_false', got {bool_style!r}")
+
+        argv: list[str] = []
+        for group, fields in self._groups.items():
+            if groups is not None and group not in groups:
+                continue
+            for field, value in fields.items():
+                if value is None:
+                    continue
+                name = f"{group}-{field}" if prefix_groups else field
+                flag = name.replace("_", "-")
+                spec = self._schema.get(group, {}).get(field)
+                if spec is not None and spec.type == "bool":
+                    if bool_style == "flag":
+                        argv.append(f"--{flag}" if value else f"--no-{flag}")
+                    else:
+                        argv.extend([f"--{flag}", "true" if value else "false"])
+                else:
+                    argv.extend([f"--{flag}", str(value)])
+        return argv
+
+    def to_argv(
+        self,
+        groups: Optional[list[str]] = None,
+        prefix_groups: bool = False,
+        bool_style: str = "flag",
+    ) -> list[str]:
+        """Alias for `flatten()`."""
+        return self.flatten(groups=groups, prefix_groups=prefix_groups, bool_style=bool_style)
+
     # -- W&B sweep export -----------------------------------------------------
 
     def to_sweep(

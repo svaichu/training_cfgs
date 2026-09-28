@@ -269,3 +269,63 @@ def test_define_then_set_does_not_reset_default():
     spec = cfg.schema("training", "learning_rate")
     assert cfg.training.learning_rate == 5e-4
     assert spec.default == 1e-4
+
+
+def test_flatten_renders_kebab_case_argv():
+    cfg = Config()
+    cfg.define("model", "base_model_path", default="nvidia/GR00T-N1.7-3B")
+    cfg.define("model", "tune_llm", default=False)
+    cfg.define("model", "tune_projector", default=True)
+    cfg.define("training", "global_batch_size", default=32)
+    cfg.define("training", "learning_rate", default=1e-4)
+
+    assert cfg.flatten() == [
+        "--base-model-path", "nvidia/GR00T-N1.7-3B",
+        "--no-tune-llm",
+        "--tune-projector",
+        "--global-batch-size", "32",
+        "--learning-rate", "0.0001",
+    ]
+
+
+def test_flatten_is_aliased_by_to_argv():
+    cfg = Config()
+    cfg.define("training", "shuffle", default=True)
+    assert cfg.flatten() == cfg.to_argv()
+
+
+def test_flatten_skips_none_values():
+    cfg = Config()
+    cfg.define("dataset", "name", default="oxe")
+    cfg.define("dataset", "cache_dir", default=None, type="str")
+    assert cfg.flatten() == ["--name", "oxe"]
+
+
+def test_flatten_filters_by_groups():
+    cfg = Config()
+    cfg.define("dataset", "name", default="oxe")
+    cfg.define("training", "learning_rate", default=1e-4)
+    assert cfg.flatten(groups=["training"]) == ["--learning-rate", "0.0001"]
+
+
+def test_flatten_prefix_groups():
+    cfg = Config()
+    cfg.define("training", "learning_rate", default=1e-4)
+    assert cfg.flatten(prefix_groups=True) == ["--training-learning-rate", "0.0001"]
+
+
+def test_flatten_bool_style_true_false():
+    cfg = Config()
+    cfg.define("training", "shuffle", default=True)
+    cfg.define("training", "amp", default=False)
+    assert cfg.flatten(bool_style="true_false") == [
+        "--shuffle", "true",
+        "--amp", "false",
+    ]
+
+
+def test_flatten_rejects_unknown_bool_style():
+    cfg = Config()
+    cfg.define("training", "shuffle", default=True)
+    with pytest.raises(ValueError, match="bool_style"):
+        cfg.flatten(bool_style="yesno")
